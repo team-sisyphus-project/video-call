@@ -17,6 +17,8 @@ const { contentTypeFor, resolveAsset } = require('./static');
 
 const { createRequestHandler, missingBuildOutputs, readPort } = require('./index');
 
+const REPO_ROOT = path.join(__dirname, '..');
+
 /**
  * Writes a file and the directories leading to it.
  *
@@ -240,6 +242,83 @@ describe('missingBuildOutputs', () => {
         fs.rmSync(path.join(root, 'libs/app.bundle.min.js'));
 
         assert.deepStrictEqual(missingBuildOutputs(root), [ 'libs/app.bundle.min.js' ]);
+    });
+});
+
+/**
+ * Evaluates a checked in `interface_config.js` and hands back the object it
+ * declares, so the assertions read the values the browser would.
+ *
+ * @param {string} file - Repository relative path of the file.
+ * @returns {Object} The declared `interfaceConfig`.
+ */
+function readInterfaceConfig(file) {
+    const source = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
+
+    // eslint-disable-next-line no-new-func
+    return new Function(`${source}\nreturn interfaceConfig;`)();
+}
+
+describe('the checked in branding', () => {
+    const title = fs.readFileSync(path.join(REPO_ROOT, 'title.html'), 'utf8');
+
+    for (const file of [ 'interface_config.js', 'demo/interface_config.js' ]) {
+        describe(file, () => {
+            const interfaceConfig = readInterfaceConfig(file);
+
+            it('names the product MeetSpace', () => {
+                assert.strictEqual(interfaceConfig.APP_NAME, 'MeetSpace');
+                assert.strictEqual(interfaceConfig.PROVIDER_NAME, 'MeetSpace');
+            });
+
+            it('points the welcome page logo at the MeetSpace watermark', () => {
+                assert.strictEqual(
+                    interfaceConfig.DEFAULT_WELCOME_PAGE_LOGO_URL,
+                    'images/meetspace-watermark.svg');
+                assert.ok(fs.existsSync(path.join(REPO_ROOT, 'images/meetspace-watermark.svg')));
+            });
+
+            it('keeps the header watermark switched on', () => {
+                // The flag gates the header mark itself, not whose mark it is:
+                // turning it off would leave the header with no logo at all.
+                assert.strictEqual(interfaceConfig.SHOW_JITSI_WATERMARK, true);
+            });
+
+            it('links the watermark to this deployment, not to upstream', () => {
+                assert.strictEqual(interfaceConfig.JITSI_WATERMARK_LINK, '/');
+            });
+
+            it('carries no upstream product name', () => {
+                const source = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
+
+                assert.ok(!source.includes('\'Jitsi Meet\''), 'Jitsi Meet is still a value');
+                assert.ok(!source.includes('images/watermark.svg'), 'the upstream watermark is still referenced');
+            });
+        });
+    }
+
+    it('titles the browser tab MeetSpace', () => {
+        assert.ok(title.includes('<title>MeetSpace</title>'));
+        assert.ok(title.includes('<meta property="og:title" content="MeetSpace"/>'));
+        assert.ok(title.includes('<meta itemprop="name" content="MeetSpace"/>'));
+    });
+
+    it('describes the product in its own words', () => {
+        const description = 'Video meetings in the browser. No installs.';
+
+        assert.strictEqual(title.split(description).length - 1, 3);
+        assert.ok(!title.includes('Jitsi'));
+    });
+
+    it('shares the MeetSpace card and favicon, and both exist', () => {
+        for (const [ tag, asset ] of [
+            [ '<meta property="og:image" content="images/meetspace-logo.png?v=1"/>', 'images/meetspace-logo.png' ],
+            [ '<meta itemprop="image" content="images/meetspace-logo.png?v=1"/>', 'images/meetspace-logo.png' ],
+            [ '<link rel="icon" href="images/meetspace-favicon.svg?v=1">', 'images/meetspace-favicon.svg' ]
+        ]) {
+            assert.ok(title.includes(tag), tag);
+            assert.ok(fs.existsSync(path.join(REPO_ROOT, asset)), asset);
+        }
     });
 });
 
