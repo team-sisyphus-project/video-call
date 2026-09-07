@@ -1,8 +1,7 @@
-import { generateRoomWithoutSeparator } from '@jitsi/js-utils/random';
-
 import { createCalendarConnectedEvent } from '../analytics/AnalyticsEvents';
 import { sendAnalytics } from '../analytics/functions';
 import { IStore } from '../app/types';
+import generateRoomName from '../base/util/roomNameGenerator';
 import { loadGoogleAPI } from '../google-api/actions';
 
 import {
@@ -238,7 +237,7 @@ export function updateCalendarEvent(id: string, calendarId: string) {
         }
 
         const { locationURL } = getState()['features/base/connection'];
-        const newRoomName = generateRoomWithoutSeparator();
+        const newRoomName = generateRoomName();
         let href = locationURL?.href ?? '';
 
         href.endsWith('/') || (href += '/');

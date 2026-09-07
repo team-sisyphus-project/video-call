@@ -1,9 +1,8 @@
-import { generateRoomWithoutSeparator } from '@jitsi/js-utils/random';
-
 import { IStateful } from '../base/app/types';
 import { isRoomValid } from '../base/conference/functions';
 import { isSupportedBrowser } from '../base/environment/environment';
 import { toState } from '../base/redux/functions';
+import generateRoomName from '../base/util/roomNameGenerator';
 import Conference from '../conference/components/web/Conference';
 import { getDeepLinkingPage } from '../deep-linking/functions';
 import UnsupportedDesktopBrowser from '../unsupported-browser/components/UnsupportedDesktopBrowser';
@@ -96,7 +95,7 @@ function _getWebWelcomePageRoute(state: IReduxState) {
         // Web: if the welcome page is disabled, go directly to a random room.
         const url = new URL(window.location.href);
 
-        url.pathname += generateRoomWithoutSeparator();
+        url.pathname += generateRoomName();
         route.href = url.href;
     }
 

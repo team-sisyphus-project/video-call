@@ -146,6 +146,10 @@ demo/
   build-index.js         generates index.demo.html from index.html
   config.js              demo Jitsi config, template
   interface_config.js    demo interface config, same MeetSpace branding
+react/features/base/util/
+  roomNameGenerator.ts     the room name the welcome page suggests
+  twoWordRoomName.ts       shortens a generated name to two words
+  twoWordRoomName.test.js  tests, `npm run test:unit`
 preview.toml             local preview contract: build, start, $PORT
 harness.config.json      preview harness contract (app block, validation steps)
 DEMO.md                  demo mode documentation
@@ -153,7 +157,11 @@ DEMO.md                  demo mode documentation
 
 The only upstream files touched are `webpack.config.js` (a demo mode branch in
 the dev server config plus host/port env overrides), `Makefile` (the `demo` and
-`demo-assets` targets), `package.json` (scripts), `.npmrc` (`include=dev`) and
+`demo-assets` targets), `package.json` (scripts), the four call sites that ask
+for a random room name (`react/features/app/getRouteToRender.web.ts`,
+`react/features/calendar-sync/actions.web.ts`, its `.native.ts` twin and
+`react/features/welcome/components/AbstractWelcomePage.ts`, which now go through
+`roomNameGenerator.ts`), `.npmrc` (`include=dev`) and
 `.gitignore` (its `tsconfig.json` rule is anchored to the root, so the checked-in
 `tests/tsconfig.json` that the tests' eslint config parses with survives a clone).
 

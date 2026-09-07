@@ -1,8 +1,7 @@
-import { generateRoomWithoutSeparator } from '@jitsi/js-utils/random';
-
 import { getDefaultURL } from '../app/functions';
 import { IStore } from '../app/types';
 import { openDialog } from '../base/dialog/actions';
+import generateRoomName from '../base/util/roomNameGenerator';
 
 import { refreshCalendar } from './actions';
 import UpdateCalendarEventDialog from './components/UpdateCalendarEventDialog.native';
@@ -34,7 +33,7 @@ export function openUpdateCalendarEventDialog(eventId: string) {
 export function updateCalendarEvent(eventId: string) {
     return (dispatch: IStore['dispatch'], getState: IStore['getState']) => {
         const defaultUrl = getDefaultURL(getState);
-        const roomName = generateRoomWithoutSeparator();
+        const roomName = generateRoomName();
 
         addLinkToCalendarEntry(getState(), eventId, `${defaultUrl}/${roomName}`)
         .finally(() => {

@@ -1,4 +1,3 @@
-import { generateRoomWithoutSeparator } from '@jitsi/js-utils/random';
 import { Component } from 'react';
 import { WithTranslation } from 'react-i18next';
 
@@ -8,6 +7,7 @@ import { appNavigate } from '../../app/actions';
 import { IReduxState, IStore } from '../../app/types';
 import { IDeeplinkingConfig } from '../../base/config/configType';
 import isInsecureRoomName from '../../base/util/isInsecureRoomName';
+import generateRoomName from '../../base/util/roomNameGenerator';
 import { isCalendarEnabled } from '../../calendar-sync/functions';
 import { isUnsafeRoomWarningEnabled } from '../../prejoin/functions';
 import { isRecentListEnabled } from '../../recent-list/functions';
@@ -262,7 +262,7 @@ export class AbstractWelcomePage<P extends IProps> extends Component<P, IState> 
      * @returns {void}
      */
     _updateRoomName() {
-        const generatedRoomName = generateRoomWithoutSeparator();
+        const generatedRoomName = generateRoomName();
         const roomPlaceholder = '';
         const updateTimeoutId = window.setTimeout(this._updateRoomName, 10000);
 
