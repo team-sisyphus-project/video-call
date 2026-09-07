@@ -79,13 +79,29 @@ const STARTUP_REASONS = {
 const BIND_ERROR_CODES = [ 'EACCES', 'EADDRINUSE', 'EADDRNOTAVAIL' ];
 
 /**
- * Build outputs the shell cannot render without. Their absence is a broken
- * deployment, not a runtime condition to paper over.
+ * Every build output `make preview` deploys, checked as one set.
+ *
+ * The shell only loads a few of these directly, but a deploy is all-or-nothing:
+ * `deploy-init` empties `libs/` and the copies follow one after another, so a
+ * build or deploy that died halfway leaves some of this list on disk and the
+ * rest absent. Checking only what the shell names would let such a run reach
+ * `STATUS=ready` and hand the browser a chunk load error instead — a build
+ * failure wearing a runtime failure's clothes.
+ *
+ * The six bundles are `deploy-appbundle-preview` in the Makefile, which is
+ * `PREVIEW_ENTRIES` in `webpack.config.js`; `server.test.js` holds this list and
+ * that target together.
  */
 const REQUIRED_BUILD_OUTPUTS = [
     'css/all.css',
     'libs/app.bundle.min.js',
-    'libs/lib-jitsi-meet.min.js'
+    'libs/chunks',
+    'libs/external_api.min.js',
+    'libs/face-landmarks-worker.min.js',
+    'libs/lib-jitsi-meet.min.js',
+    'libs/noise-suppressor-worklet.min.js',
+    'libs/screenshot-capture-worker.min.js',
+    'libs/vb-inference-worker.min.js'
 ];
 
 /**
@@ -209,13 +225,48 @@ function readPort(env) {
 }
 
 /**
+ * Whether a build output is there in a form that can be served.
+ *
+ * Existence alone is too weak a test for the way these files arrive. `cp` and a
+ * redirected compiler both create the destination before they fill it, so an
+ * interrupted deploy leaves empty files and empty directories behind. An empty
+ * `libs/chunks` is a copy that started and did not finish, and a zero byte
+ * bundle is not a bundle; both are the build stage failing, and neither should
+ * be able to pass for a build.
+ *
+ * @param {string} target - The absolute path of the build output.
+ * @returns {boolean} True when the output is present and not empty.
+ */
+function isBuilt(target) {
+    let stats;
+
+    try {
+        stats = fs.statSync(target);
+    } catch (error) {
+        // Anything that cannot be stat'd cannot be served, and the reason it
+        // cannot be is the deploy's to explain, not this check's.
+        return false;
+    }
+
+    if (stats.isDirectory()) {
+        return fs.readdirSync(target).length > 0;
+    }
+
+    return stats.isFile() && stats.size > 0;
+}
+
+/**
  * Verifies that the application has been built.
+ *
+ * Every output is checked, not just the first one to fail: a preview log that
+ * names one missing file at a time turns one broken build into as many restarts
+ * as there are files.
  *
  * @param {string} root - The repository root.
  * @returns {string[]} The missing build outputs, empty when the build is there.
  */
 function missingBuildOutputs(root) {
-    return REQUIRED_BUILD_OUTPUTS.filter(file => !fs.existsSync(path.join(root, file)));
+    return REQUIRED_BUILD_OUTPUTS.filter(file => !isBuilt(path.join(root, file)));
 }
 
 /**
@@ -399,8 +450,9 @@ function start({ env = process.env, log = console.log, onError = failStartup, ro
     if (missing.length) {
         throw startupError(
             'build-output-missing',
-            `The application is not built, missing: ${missing.join(', ')}. `
-            + 'Run "npm run build" first.');
+            `missing ${missing.length} of ${REQUIRED_BUILD_OUTPUTS.length} build outputs: `
+            + `${missing.join(', ')}. `
+            + 'Run "npm run build:preview" (or "npm run build") first.');
     }
 
     const port = readPort(env);
@@ -439,6 +491,7 @@ if (require.main === module) {
 
 module.exports = {
     DEFAULT_PORT,
+    REQUIRED_BUILD_OUTPUTS,
     STARTUP_REASONS,
     classifyStartupError,
     createRequestHandler,

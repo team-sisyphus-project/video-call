@@ -17,6 +17,7 @@ const { renderShell } = require('./shell');
 const { contentTypeFor, resolveAsset } = require('./static');
 
 const {
+    REQUIRED_BUILD_OUTPUTS,
     STARTUP_REASONS,
     classifyStartupError,
     createRequestHandler,
@@ -58,9 +59,16 @@ function createFixtureRoot() {
     ].join('\n'));
     write(path.join(root, 'base.html'), '<base href="/" />');
     write(path.join(root, 'interface_config.js'), 'var interfaceConfig = {\n    APP_NAME: \'Jitsi Meet\'\n};\n');
+
+    // Every sentinel a deployed preview build leaves behind, so that a test
+    // removing one is removing it from an otherwise complete build.
+    for (const output of REQUIRED_BUILD_OUTPUTS) {
+        write(path.join(root, output === 'libs/chunks' ? 'libs/chunks/1.min.js' : output), 'void 0;');
+    }
+
+    // Written after the loop: the stylesheet is served back in its own tests,
+    // so its contents have to be a stylesheet.
     write(path.join(root, 'css/all.css'), 'body{margin:0}');
-    write(path.join(root, 'libs/app.bundle.min.js'), 'void 0;');
-    write(path.join(root, 'libs/lib-jitsi-meet.min.js'), 'void 0;');
     write(path.join(root, 'secret.txt'), 'do not serve me');
 
     return root;
@@ -326,22 +334,83 @@ describe('contentTypeFor', () => {
 });
 
 describe('missingBuildOutputs', () => {
-    let root;
+    /**
+     * Runs a check against a throwaway built checkout that `damage` has been
+     * let loose on.
+     *
+     * @param {Function} damage - Given the root, breaks the build somehow.
+     * @returns {string[]} The outputs reported missing.
+     */
+    function afterDamaging(damage) {
+        const root = createFixtureRoot();
 
-    before(() => {
-        root = createFixtureRoot();
-    });
-    after(() => fs.rmSync(root, { recursive: true,
-        force: true }));
+        try {
+            damage(root);
+
+            return missingBuildOutputs(root);
+        } finally {
+            fs.rmSync(root, { recursive: true,
+                force: true });
+        }
+    }
 
     it('is empty for a built checkout', () => {
-        assert.deepStrictEqual(missingBuildOutputs(root), []);
+        assert.deepStrictEqual(afterDamaging(() => { /* nothing broken */ }), []);
     });
 
-    it('names what is missing', () => {
-        fs.rmSync(path.join(root, 'libs/app.bundle.min.js'));
+    // One case per sentinel: a deploy dies wherever it dies, and the output it
+    // did not reach is the one nobody thought to check for.
+    for (const output of REQUIRED_BUILD_OUTPUTS) {
+        it(`names ${output} when the build did not produce it`, () => {
+            const missing = afterDamaging(root => fs.rmSync(path.join(root, output), { recursive: true }));
 
-        assert.deepStrictEqual(missingBuildOutputs(root), [ 'libs/app.bundle.min.js' ]);
+            assert.deepStrictEqual(missing, [ output ]);
+        });
+    }
+
+    it('names every missing output at once, not the first one only', () => {
+        const missing = afterDamaging(root => {
+            fs.rmSync(path.join(root, 'libs'), { recursive: true });
+        });
+
+        assert.deepStrictEqual(missing, REQUIRED_BUILD_OUTPUTS.filter(output => output !== 'css/all.css'));
+    });
+
+    it('counts an empty chunks directory as missing, because a half-done copy is not a build', () => {
+        const missing = afterDamaging(root => {
+            fs.rmSync(path.join(root, 'libs/chunks'), { recursive: true });
+            fs.mkdirSync(path.join(root, 'libs/chunks'));
+        });
+
+        assert.deepStrictEqual(missing, [ 'libs/chunks' ]);
+    });
+
+    it('counts a zero byte bundle as missing, because a created file is not a written one', () => {
+        const missing = afterDamaging(root => fs.writeFileSync(path.join(root, 'libs/app.bundle.min.js'), ''));
+
+        assert.deepStrictEqual(missing, [ 'libs/app.bundle.min.js' ]);
+    });
+
+    it('requires everything the preview deploy of the app bundle puts in libs', () => {
+        const makefile = fs.readFileSync(path.join(__dirname, '..', 'Makefile'), 'utf8');
+        const recipe = makefile.split('\ndeploy-appbundle-preview:\n')[1].split('\n\n')[0];
+        const copied = (recipe.match(/\$\(BUILD_DIR\)\/[\w.-]+\.js/g) || [])
+            .map(file => file.replace('$(BUILD_DIR)/', 'libs/'));
+
+        // An empty list would make the loop below pass while proving nothing;
+        // it means the recipe moved, not that it copies nothing.
+        assert.ok(copied.length, `no bundle found in deploy-appbundle-preview: ${recipe}`);
+
+        // A bundle renamed in the Makefile and not here is a bundle this server
+        // would let a build skip. Held together rather than remembered.
+        for (const file of copied) {
+            assert.ok(
+                REQUIRED_BUILD_OUTPUTS.includes(file),
+                `the preview deploy copies ${file} but startup does not require it`);
+        }
+
+        assert.ok(recipe.includes('$(BUILD_DIR)/chunks'), recipe);
+        assert.ok(REQUIRED_BUILD_OUTPUTS.includes('libs/chunks'));
     });
 });
 
@@ -511,10 +580,13 @@ describe('the server as its own process', () => {
             [ `[meetspace] STAGE=start STATUS=ready url=http://0.0.0.0:${port}` ]);
     });
 
-    it('classifies a missing build output and exits non-zero', async () => {
+    it('classifies a missing build output, names all of them, and exits non-zero', async () => {
         const missingRoot = createRunnableRoot();
+        const absent = [ 'libs/app.bundle.min.js', 'libs/chunks', 'libs/vb-inference-worker.min.js' ];
 
-        fs.rmSync(path.join(missingRoot, 'libs/app.bundle.min.js'));
+        for (const output of absent) {
+            fs.rmSync(path.join(missingRoot, output), { recursive: true });
+        }
 
         const { code, output } = await runServer({ root: missingRoot });
 
@@ -525,7 +597,11 @@ describe('the server as its own process', () => {
         assert.deepStrictEqual(
             stageLines(output),
             [ '[meetspace] STAGE=start STATUS=failed REASON=build-output-missing' ]);
-        assert.ok(output.includes('libs/app.bundle.min.js'), output);
+
+        // One restart per missing file is what naming only the first one costs.
+        for (const file of absent) {
+            assert.ok(output.includes(file), `${file} is missing but unnamed in: ${output}`);
+        }
     });
 
     it('classifies an unusable PORT and exits non-zero', async () => {
