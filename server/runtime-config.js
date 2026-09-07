@@ -49,34 +49,109 @@ function readBackend(env) {
 }
 
 /**
- * The buttons a conference may offer at all.
+ * The optional backends a deployment may run behind the toolbar.
  *
- * `toolbarButtons` is an allowlist, not a toolbar layout: it decides what
- * exists, and the client then splits it between the main bar and the "More"
- * menu. Left undefined, the client enables every button it knows about, which
- * is how the default deployment ends up with a crowded bar.
+ * Recording, live streaming and dial-in are not parts of this application: they
+ * are separate services a deployment either runs or does not. The client cannot
+ * tell the difference. It renders whatever `toolbarButtons` names, and a button
+ * whose service is missing looks like every other button until someone presses
+ * it. So each service here stays off until the environment names the URLs the
+ * client needs to reach it; naming them is what adds the buttons back and fills
+ * in the configuration keys the client reads.
  *
- * The primaries lead the list; everything after them is reachable under
- * "More". Omitted on purpose, because this deployment has no backend for them:
- * `recording`, `livestreaming` and `highlight` (no recorder), `invite` (no
- * dial-in or invitation service) and `linktosalesforce` (no CRM). A deployment
- * that runs those services re-enables them by adding the key back here.
+ * `variables` are the environment variables holding a service's URLs, in the
+ * order `config` reads them. A service's variables are required together: half
+ * a service is a misconfiguration, and it is reported as one rather than
+ * quietly hidden.
  */
-const TOOLBAR_BUTTONS = [
+const OPTIONAL_SERVICES = [
+    {
+        name: 'recording',
 
-    // The primaries MAIN_TOOLBAR_BUTTONS keeps in the bar, plus leaving, which
-    // the client renders beside the bar rather than in it.
+        // The recorder runs beside the signalling deployment and the client
+        // never addresses it directly, so the one recording URL the client
+        // takes is where a finished recording is fetched from. A highlight
+        // marks a moment in a recording, so it arrives and leaves with one.
+        buttons: [ 'recording', 'highlight' ],
+        variables: [ 'MEETSPACE_RECORDING_SHARING_URL' ],
+        config: ([ recordingSharingUrl ]) => ({
+            recordingService: {
+                enabled: true,
+                sharingEnabled: true
+            },
+            recordingSharingUrl
+        })
+    },
+    {
+        name: 'live streaming',
+
+        // The stream key reaches the recorder through the signalling
+        // deployment, so the client takes no ingest URL. The streaming URL it
+        // does render is the platform's help page, shown beside the field the
+        // key is typed into, and a deployment with somewhere to stream to has
+        // one to point at.
+        buttons: [ 'livestreaming' ],
+        variables: [ 'MEETSPACE_LIVE_STREAMING_HELP_URL' ],
+        config: ([ helpLink ]) => ({
+            liveStreaming: {
+                enabled: true,
+                helpLink
+            }
+        })
+    },
+    {
+        name: 'dial-in',
+
+        // Dial-in is the whole of what the invite button offers here: one
+        // endpoint lists the numbers to call, the other turns a room into the
+        // PIN to type after dialling. The client asks for both or shows
+        // neither, which is why both are required together.
+        buttons: [ 'invite' ],
+        variables: [ 'MEETSPACE_DIAL_IN_NUMBERS_URL', 'MEETSPACE_DIAL_IN_CONF_CODE_URL' ],
+        config: ([ dialInNumbersUrl, dialInConfCodeUrl ]) => ({
+            dialInConfCodeUrl,
+            dialInNumbersUrl
+        })
+    }
+];
+
+/**
+ * Every button an optional service owns.
+ *
+ * These are the buttons `buildToolbarButtons` drops unless the service that
+ * backs them is configured.
+ */
+const OPTIONAL_BUTTONS = new Set(OPTIONAL_SERVICES.flatMap(service => service.buttons));
+
+/**
+ * The controls a call is actually run with.
+ *
+ * They lead `toolbarButtons` and fill the main bar at every width.
+ */
+const PRIMARY_BUTTONS = [
     'microphone',
     'camera',
     'desktop',
     'chat',
     'participants-pane',
-    'raisehand',
-    'hangup',
+    'raisehand'
+];
 
-    // Secondaries. Reachable, but through the "More" menu.
+/**
+ * Everything else a conference may offer, in the order it is offered.
+ *
+ * Reachable through the "More" menu, apart from the two the widest bar rows
+ * spend their spare slots on. Entries owned by an optional service keep their
+ * place here whether or not the service is configured, so that turning a
+ * service on adds a button where it belongs instead of at the end.
+ *
+ * `linktosalesforce` is absent outright: it needs a CRM, which is not a service
+ * this deployment offers to configure.
+ */
+const SECONDARY_BUTTONS = [
     'tileview',
     'fullscreen',
+    'invite',
     'select-background',
     'videoquality',
     'security',
@@ -85,6 +160,9 @@ const TOOLBAR_BUTTONS = [
     'sharedvideo',
     'shareaudio',
     'whiteboard',
+    'recording',
+    'highlight',
+    'livestreaming',
     'stats',
     'settings',
     'shortcuts',
@@ -110,12 +188,14 @@ const TOOLBAR_BUTTONS = [
  *
  * The two widest rows therefore carry the six primaries plus the two viewing
  * controls that would otherwise be chosen for us. "More" and "Leave" are
- * rendered outside this list and do not take a slot.
+ * rendered outside this list and do not take a slot. Optional services never
+ * appear here: a service a deployment may not run cannot hold a fixed slot in
+ * the bar, so its buttons live under "More".
  */
 const MAIN_TOOLBAR_BUTTONS = [
-    [ 'microphone', 'camera', 'desktop', 'chat', 'participants-pane', 'raisehand', 'tileview', 'fullscreen' ],
-    [ 'microphone', 'camera', 'desktop', 'chat', 'participants-pane', 'raisehand', 'tileview' ],
-    [ 'microphone', 'camera', 'desktop', 'chat', 'participants-pane', 'raisehand' ],
+    [ ...PRIMARY_BUTTONS, 'tileview', 'fullscreen' ],
+    [ ...PRIMARY_BUTTONS, 'tileview' ],
+    [ ...PRIMARY_BUTTONS ],
     [ 'microphone', 'camera', 'desktop', 'chat', 'participants-pane' ],
     [ 'microphone', 'camera', 'chat', 'participants-pane' ],
     [ 'microphone', 'camera', 'chat' ],
@@ -123,12 +203,124 @@ const MAIN_TOOLBAR_BUTTONS = [
 ];
 
 /**
+ * Reads one service URL from the environment.
+ *
+ * The value ends up in the JavaScript served to every visitor, so it is parsed
+ * rather than trusted: what comes back is the URL the parser normalised, with
+ * anything that is not a plain URL character percent encoded.
+ *
+ * @param {Object} env - The environment to read from.
+ * @param {string} name - The environment variable to read.
+ * @returns {string|null} The normalised URL, or null when the variable is unset.
+ */
+function readServiceUrl(env, name) {
+    const raw = env[name] && String(env[name]).trim();
+
+    if (!raw) {
+        return null;
+    }
+
+    let url;
+
+    try {
+        url = new URL(raw);
+    } catch (error) {
+        throw new Error(
+            `${name} is not a valid URL: ${JSON.stringify(raw)}. `
+            + 'Expected something like "https://meet.example.com/service".',
+            { cause: error });
+    }
+
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+        throw new Error(
+            `${name} is not an http(s) URL: ${JSON.stringify(raw)}. `
+            + 'The browser fetches this address, so only http and https are accepted.');
+    }
+
+    return url.href;
+}
+
+/**
+ * Reads which optional services the environment configures.
+ *
+ * A service whose URLs are absent contributes nothing: no buttons, no
+ * configuration keys, and so no way into a backend that is not there.
+ *
+ * @param {Object} env - The environment to read from.
+ * @returns {Object} `buttons`, the toolbar keys the configured services add,
+ * and `config`, the client configuration keys they contribute.
+ */
+function readServices(env) {
+    const buttons = [];
+    let config = {};
+
+    for (const service of OPTIONAL_SERVICES) {
+        const urls = service.variables.map(name => readServiceUrl(env, name));
+        const named = service.variables.filter((_name, index) => urls[index]);
+
+        if (named.length === 0) {
+            continue;
+        }
+
+        if (named.length !== service.variables.length) {
+            const missing = service.variables.filter((_name, index) => !urls[index]);
+
+            throw new Error(
+                `${service.name} is half configured: ${named.join(', ')} names a service URL `
+                + `but ${missing.join(', ')} is empty. The client needs every one of them, so set `
+                + `them all, or none to leave ${service.name} off.`);
+        }
+
+        buttons.push(...service.buttons);
+        config = {
+            ...config,
+            ...service.config(urls)
+        };
+    }
+
+    return {
+        buttons,
+        config
+    };
+}
+
+/**
+ * The buttons a conference may offer at all.
+ *
+ * `toolbarButtons` is an allowlist, not a toolbar layout: it decides what
+ * exists, and the client then splits it between the main bar and the "More"
+ * menu. Left undefined, the client enables every button it knows about, which
+ * is how the default deployment ends up with a crowded bar.
+ *
+ * The primaries lead the list; everything after them is reachable under "More",
+ * minus the buttons of every optional service the environment did not
+ * configure.
+ *
+ * @param {Array<string>} serviceButtons - The buttons the configured optional
+ * services add.
+ * @returns {Array<string>} The buttons this deployment offers.
+ */
+function buildToolbarButtons(serviceButtons) {
+    return [
+
+        // The primaries, plus leaving, which the client renders beside the bar
+        // rather than in it.
+        ...PRIMARY_BUTTONS,
+        'hangup',
+        ...SECONDARY_BUTTONS.filter(
+            button => !OPTIONAL_BUTTONS.has(button) || serviceButtons.includes(button))
+    ];
+}
+
+/**
  * Builds the client configuration object for a backend host.
  *
  * @param {string} backend - The signalling deployment host.
+ * @param {Object} services - The optional services the environment configured,
+ * as `readServices` returns them.
  * @returns {Object} The `config` object the application reads.
  */
-function buildConfig(backend) {
+function buildConfig(backend, services) {
     return {
         analytics: {
             disabled: true,
@@ -160,8 +352,8 @@ function buildConfig(backend) {
             muc: `conference.${backend}`
         },
 
-        // The bar carries the controls a call is actually run with; the rest of
-        // TOOLBAR_BUTTONS sits one click away under "More".
+        // The bar carries the controls a call is actually run with; the rest
+        // of `toolbarButtons` sits one click away under "More".
         mainToolbarButtons: MAIN_TOOLBAR_BUTTONS,
 
         p2p: {
@@ -177,19 +369,25 @@ function buildConfig(backend) {
 
         testing: {},
 
-        toolbarButtons: TOOLBAR_BUTTONS
+        toolbarButtons: buildToolbarButtons(services.buttons),
+
+        // What the configured optional services need the client to know:
+        // where to fetch a recording, where to read about streaming, which
+        // numbers to dial. Nothing at all when none of them is configured.
+        ...services.config
     };
 }
 
 /**
  * Generates the `config.js` served to the browser.
  *
- * @param {Object} env - The environment to read the backend from.
+ * @param {Object} env - The environment to read the backend and the optional
+ * services from.
  * @returns {string} JavaScript source declaring the global `config`.
  */
 function buildConfigJs(env) {
     const backend = readBackend(env);
-    const config = JSON.stringify(buildConfig(backend), null, 4);
+    const config = JSON.stringify(buildConfig(backend, readServices(env)), null, 4);
 
     return '/* Generated by server/index.js. Configure with MEETSPACE_BACKEND. */\n'
         + `var config = ${config};\n`;
@@ -222,5 +420,6 @@ module.exports = {
     DEFAULT_BACKEND,
     buildConfigJs,
     buildInterfaceConfigJs,
-    readBackend
+    readBackend,
+    readServices
 };

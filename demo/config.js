@@ -46,8 +46,10 @@ var config = {
     //
     // `toolbarButtons` is the availability allowlist -- what a conference may
     // offer at all. Left undefined, the client enables every button it knows
-    // about. Recording, live streaming, highlights, invitations and CRM links
-    // are omitted because this deployment runs no backend for them.
+    // about. Recording, live streaming, highlights and dial-in are omitted
+    // because the demo runs no backend for them: the served configuration adds
+    // those buttons when the deployment names their service URLs, and the demo
+    // names none. CRM links are omitted outright.
     toolbarButtons: [
 
         // The primaries, plus leaving, which renders beside the bar.

@@ -120,19 +120,43 @@ all — one that is missing there is in neither the bar nor "More".
 what order; whatever it leaves out is under "More". Both are written into the
 `config.js` this server generates, and mirrored in `demo/config.js`.
 
-Five buttons are left out of `toolbarButtons` altogether, because this
-deployment has no backend behind them: `recording`, `livestreaming` and
-`highlight` (no recorder), `invite` (no dial-in or invitation service) and
-`linktosalesforce` (no CRM). Under "More" they would be buttons that cannot
-work.
+Some buttons are not the client's to offer. Recording, live streaming and
+dial-in are separate services a deployment either runs or does not, and the
+client cannot tell: it draws the button either way, and the difference only
+shows when someone presses it. So each of those stays out of `toolbarButtons`
+until the environment names the URL the client needs to reach the service:
 
-To re-enable one, add its key back to `TOOLBAR_BUTTONS` in
-`server/runtime-config.js`, and to the matching list in `demo/config.js` so that
-demo mode keeps showing the same product — a test compares the two copies and
-fails when they drift. That much puts the button under "More". To give it a
-place in the bar instead, put the key into the rows of `MAIN_TOOLBAR_BUTTONS` as
-well, in place of another: a row's length is the width it addresses, so a row
-that grows addresses a different width rather than a wider bar.
+| Variable | What it names | What it turns on |
+| --- | --- | --- |
+| `MEETSPACE_RECORDING_SHARING_URL` | Where a finished recording is fetched from | `recording`, and `highlight` with it |
+| `MEETSPACE_LIVE_STREAMING_HELP_URL` | The streaming platform's help page, shown beside the stream key field | `livestreaming` |
+| `MEETSPACE_DIAL_IN_NUMBERS_URL` and `MEETSPACE_DIAL_IN_CONF_CODE_URL` | The numbers to call, and the PIN for a room | `invite` |
+
+```bash
+MEETSPACE_BACKEND=meet.example.com \
+MEETSPACE_RECORDING_SHARING_URL=https://recordings.example.com/ \
+npm start
+```
+
+Dial-in needs both of its URLs, because the client asks for both or shows
+neither; naming one and not the other stops the server with the name of the
+missing one rather than quietly dropping the button. Every URL is parsed before
+it is served, so a value that is not an `http`/`https` address is a startup
+error, not something the browser is asked to fetch.
+
+A configured service arrives under "More", in the place it holds in
+`SECONDARY_BUTTONS`, never in the main bar: a service a deployment may not run
+cannot hold a fixed slot in a bar sized for the controls every call needs.
+
+`linktosalesforce` is absent outright — it needs a CRM, which is not a service
+this deployment offers to configure. To offer a button that has no service
+behind it, add its key to `SECONDARY_BUTTONS` in `server/runtime-config.js`, and
+to the matching list in `demo/config.js` so that demo mode keeps showing the
+same product — a test compares the two copies and fails when they drift. To give
+it a place in the bar instead, put the key into the rows of
+`MAIN_TOOLBAR_BUTTONS` as well, in place of another: a row's length is the width
+it addresses, so a row that grows addresses a different width rather than a
+wider bar.
 
 ### Demo mode
 

@@ -12,7 +12,7 @@ const { after, before, describe, it } = require('node:test');
 const os = require('os');
 const path = require('path');
 
-const { buildConfigJs, buildInterfaceConfigJs, readBackend } = require('./runtime-config');
+const { buildConfigJs, buildInterfaceConfigJs, readBackend, readServices } = require('./runtime-config');
 const { renderShell } = require('./shell');
 const { contentTypeFor, resolveAsset } = require('./static');
 
@@ -287,6 +287,140 @@ describe('the toolbar the configuration serves', () => {
             'profile',
             'help'
         ]);
+    });
+});
+
+describe('the services the environment configures', () => {
+    const RECORDING = { MEETSPACE_RECORDING_SHARING_URL: 'https://recordings.example.com/' };
+    const STREAMING = { MEETSPACE_LIVE_STREAMING_HELP_URL: 'https://help.example.com/streaming' };
+    const DIAL_IN = {
+        MEETSPACE_DIAL_IN_CONF_CODE_URL: 'https://dial-in.example.com/code',
+        MEETSPACE_DIAL_IN_NUMBERS_URL: 'https://dial-in.example.com/numbers'
+    };
+    const EVERYTHING = { ...RECORDING,
+        ...STREAMING,
+        ...DIAL_IN };
+
+    it('offers nothing and configures nothing when no service URL is named', () => {
+        const config = evaluateConfig();
+
+        for (const button of [ 'recording', 'highlight', 'livestreaming', 'invite' ]) {
+            assert.ok(!config.toolbarButtons.includes(button), `${button} is offered without a service`);
+        }
+
+        for (const key of [
+            'recordingService',
+            'recordingSharingUrl',
+            'liveStreaming',
+            'dialInNumbersUrl',
+            'dialInConfCodeUrl'
+        ]) {
+            assert.ok(!(key in config), `${key} is configured without a service`);
+        }
+    });
+
+    it('offers recording, and highlights with it, once the recording URL is named', () => {
+        const config = evaluateConfig(RECORDING);
+
+        assert.ok(config.toolbarButtons.includes('recording'));
+        assert.ok(config.toolbarButtons.includes('highlight'));
+        assert.strictEqual(config.recordingService.enabled, true);
+        assert.strictEqual(config.recordingSharingUrl, 'https://recordings.example.com/');
+
+        // One service does not turn on another.
+        assert.ok(!config.toolbarButtons.includes('livestreaming'));
+        assert.ok(!config.toolbarButtons.includes('invite'));
+    });
+
+    it('offers live streaming once the streaming URL is named', () => {
+        const config = evaluateConfig(STREAMING);
+
+        assert.ok(config.toolbarButtons.includes('livestreaming'));
+        assert.strictEqual(config.liveStreaming.enabled, true);
+        assert.strictEqual(config.liveStreaming.helpLink, 'https://help.example.com/streaming');
+        assert.ok(!config.toolbarButtons.includes('recording'));
+    });
+
+    it('offers dial-in once both dial-in URLs are named', () => {
+        const config = evaluateConfig(DIAL_IN);
+
+        assert.ok(config.toolbarButtons.includes('invite'));
+        assert.strictEqual(config.dialInNumbersUrl, 'https://dial-in.example.com/numbers');
+        assert.strictEqual(config.dialInConfCodeUrl, 'https://dial-in.example.com/code');
+    });
+
+    it('reports a half configured service instead of hiding it', () => {
+        assert.throws(
+            () => readServices({ MEETSPACE_DIAL_IN_NUMBERS_URL: 'https://dial-in.example.com/numbers' }),
+            /dial-in is half configured.*MEETSPACE_DIAL_IN_CONF_CODE_URL/s);
+        assert.throws(
+            () => readServices({ MEETSPACE_DIAL_IN_CONF_CODE_URL: 'https://dial-in.example.com/code' }),
+            /dial-in is half configured.*MEETSPACE_DIAL_IN_NUMBERS_URL/s);
+    });
+
+    it('treats an empty variable as an unnamed one', () => {
+        const config = evaluateConfig({ MEETSPACE_RECORDING_SHARING_URL: '   ' });
+
+        assert.ok(!config.toolbarButtons.includes('recording'));
+    });
+
+    it('refuses a service URL the browser cannot fetch', () => {
+        assert.throws(
+            () => readServices({ MEETSPACE_RECORDING_SHARING_URL: 'javascript:alert(1)' }),
+            /not an http\(s\) URL/);
+        assert.throws(
+            () => readServices({ MEETSPACE_LIVE_STREAMING_HELP_URL: 'help.example.com/streaming' }),
+            /not a valid URL/);
+    });
+
+    it('encodes a service URL that could break out of the generated source', () => {
+        const source = buildConfigJs({
+            MEETSPACE_RECORDING_SHARING_URL: 'https://recordings.example.com/a"+alert(1)+"b'
+        });
+
+        assert.ok(!source.includes('alert(1)+"b"'), 'the URL escaped its string');
+        assert.strictEqual(
+            evaluateConfig({ MEETSPACE_RECORDING_SHARING_URL: 'https://recordings.example.com/a"+alert(1)+"b' })
+                .recordingSharingUrl,
+            'https://recordings.example.com/a%22+alert(1)+%22b');
+    });
+
+    it('names only buttons the client knows, whatever is configured', () => {
+        const { toolbarButtons } = evaluateConfig(EVERYTHING);
+        const known = readKnownToolbarButtons();
+
+        for (const button of toolbarButtons) {
+            assert.ok(known.includes(button), `${button} is not a toolbar button`);
+        }
+
+        assert.strictEqual(new Set(toolbarButtons).size, toolbarButtons.length, 'a button is listed twice');
+    });
+
+    it('leaves a configured service under "More" rather than in the bar', () => {
+        const { mainToolbarButtons } = evaluateConfig(EVERYTHING);
+
+        assert.deepStrictEqual(mainToolbarButtons, evaluateConfig().mainToolbarButtons);
+
+        for (const row of mainToolbarButtons) {
+            for (const button of row) {
+                assert.ok(
+                    ![ 'recording', 'highlight', 'livestreaming', 'invite' ].includes(button),
+                    `${button} holds a slot in the bar`);
+            }
+        }
+    });
+
+    it('adds a service button in its place, not at the end of the menu', () => {
+        const withoutServices = evaluateConfig().toolbarButtons;
+        const withServices = evaluateConfig(EVERYTHING).toolbarButtons;
+
+        // Turning a service on inserts buttons; it never reorders the rest.
+        assert.deepStrictEqual(
+            withServices.filter(button => withoutServices.includes(button)),
+            withoutServices);
+        assert.ok(
+            withServices.indexOf('invite') < withServices.indexOf('help'),
+            'the service buttons were appended after the menu');
     });
 });
 
