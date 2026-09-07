@@ -106,6 +106,7 @@ demo/
   build-index.js         generates index.demo.html from index.html
   config.js              demo Jitsi config, template
   interface_config.js    demo branding
+preview.toml             local preview contract: build, start, $PORT
 harness.config.json      preview harness contract (app block, validation steps)
 DEMO.md                  demo mode documentation
 ```

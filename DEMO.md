@@ -128,9 +128,10 @@ node demo/start.js --port 5400    # port 5400, harness style
 the launcher exits non-zero if it is already in use. `PORT` and `HOST` env vars
 work as fallbacks for the two flags.
 
-`harness.config.json` carries the contract: `smokeCommand: node demo/start.js`,
-`portBase: 5400`, `portArg: --port`, `demoMode: true`. `npm start` is the
-production server (`server/index.js`), not this launcher; see the README.
+`preview.toml` and `harness.config.json` describe the production path, not this
+launcher: `npm run build` then `npm start`, with the port read from `PORT`. The
+demo launcher is a development convenience and is started by hand
+(`npm run demo`); see the README for the production server.
 
 `hashRouting` is `false`, and that is deliberate. jitsi-meet routes rooms by
 path (`/RoomName`) and the shell carries `<base href="/">`. The demo dev server
