@@ -38,6 +38,58 @@ var config = {
         hideDisplayName: false
     },
 
+    // The toolbar, identical to what `server/runtime-config.js` serves in
+    // production. The demo exists to show the product, so it shows the
+    // product's toolbar rather than the client's default one. A change here is
+    // a change there as well: `server/server.test.js` fails when the two drift
+    // apart.
+    //
+    // `toolbarButtons` is the availability allowlist -- what a conference may
+    // offer at all. Left undefined, the client enables every button it knows
+    // about. Recording, live streaming, highlights, invitations and CRM links
+    // are omitted because this deployment runs no backend for them.
+    toolbarButtons: [
+
+        // The primaries, plus leaving, which renders beside the bar.
+        'microphone',
+        'camera',
+        'desktop',
+        'chat',
+        'participants-pane',
+        'raisehand',
+        'hangup',
+
+        // Secondaries. Reachable, but through the "More" menu.
+        'tileview',
+        'fullscreen',
+        'select-background',
+        'videoquality',
+        'security',
+        'closedcaptions',
+        'noisesuppression',
+        'sharedvideo',
+        'shareaudio',
+        'whiteboard',
+        'stats',
+        'settings',
+        'shortcuts',
+        'profile',
+        'help'
+    ],
+
+    // What the main bar shows, per width. The client picks a row by its length,
+    // which is the number of slots the current width gives the bar (8 down to
+    // 2), and the position in the row is the position in the bar.
+    mainToolbarButtons: [
+        [ 'microphone', 'camera', 'desktop', 'chat', 'participants-pane', 'raisehand', 'tileview', 'fullscreen' ],
+        [ 'microphone', 'camera', 'desktop', 'chat', 'participants-pane', 'raisehand', 'tileview' ],
+        [ 'microphone', 'camera', 'desktop', 'chat', 'participants-pane', 'raisehand' ],
+        [ 'microphone', 'camera', 'desktop', 'chat', 'participants-pane' ],
+        [ 'microphone', 'camera', 'chat', 'participants-pane' ],
+        [ 'microphone', 'camera', 'chat' ],
+        [ 'microphone', 'camera' ]
+    ],
+
     // No gravatar, no analytics, no callstats, no third party beacons.
     disableThirdPartyRequests: true,
     analytics: {

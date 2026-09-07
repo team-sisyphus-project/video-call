@@ -1,5 +1,6 @@
 /**
- * Tests for the production server.
+ * Tests for the production server, and for the demo configuration template it
+ * is mirrored by.
  *
  * Run with `npm run test:server`.
  */
@@ -66,6 +67,22 @@ function createFixtureRoot() {
 function evaluateConfig(env = {}) {
     // eslint-disable-next-line no-new-func
     return new Function(`${buildConfigJs(env)}\nreturn config;`)();
+}
+
+/**
+ * Evaluates the demo `config.js` template the way the browser does.
+ *
+ * The template is read as it is checked in, placeholder and all: `demo/build-index.js`
+ * only substitutes the backend host, which is a string and cannot change the
+ * shape of the object.
+ *
+ * @returns {Object} The `config` object a demo visitor would read.
+ */
+function evaluateDemoConfig() {
+    const source = fs.readFileSync(path.join(__dirname, '../demo/config.js'), 'utf8');
+
+    // eslint-disable-next-line no-new-func
+    return new Function(`${source}\nreturn config;`)();
 }
 
 /**
@@ -270,6 +287,20 @@ describe('the toolbar the configuration serves', () => {
             'profile',
             'help'
         ]);
+    });
+});
+
+describe('the toolbar the demo shows', () => {
+    it('offers exactly the buttons the served configuration offers', () => {
+        assert.deepStrictEqual(
+            evaluateDemoConfig().toolbarButtons,
+            evaluateConfig().toolbarButtons);
+    });
+
+    it('lays the bar out exactly as the served configuration does', () => {
+        assert.deepStrictEqual(
+            evaluateDemoConfig().mainToolbarButtons,
+            evaluateConfig().mainToolbarButtons);
     });
 });
 
