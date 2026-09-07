@@ -19,6 +19,7 @@ const path = require('path');
 const { SKIP_MOBILE } = require('./postinstall');
 const {
     MARKER,
+    STAGES,
     createTail,
     exitCodeFor,
     formatExit,
@@ -26,6 +27,7 @@ const {
     parseStages
 } = require('./preview');
 
+const ROOT = path.resolve(__dirname, '..');
 const RUNNER = path.join(__dirname, 'preview.js');
 const POSIX = process.platform !== 'win32';
 
@@ -33,18 +35,21 @@ const POSIX = process.platform !== 'win32';
  * Writes a fake `npm` that reports the stage it was asked for and fails at the
  * stage named by `FAIL_AT`, in the way named by `FAIL_MODE`.
  *
+ * The arguments each stage is run with are read from `STAGES` rather than
+ * written out here, so renaming the script a stage runs cannot quietly turn
+ * these cases into a fake npm that never fails.
+ *
  * @returns {string} The directory to put in front of PATH.
  */
 function createFakeNpm() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'meetspace-preview-'));
     const npm = path.join(dir, 'npm');
+    const arms = Object.entries(STAGES).map(([ stage, { args } ]) => `  '${args.join(' ')}') stage=${stage} ;;`);
 
     fs.writeFileSync(npm, [
         '#!/bin/sh',
-        'case "$1" in',
-        '  install) stage=install ;;',
-        '  run) stage="$2" ;;',
-        '  start) stage=start ;;',
+        'case "$*" in',
+        ...arms,
         '  *) stage=unknown ;;',
         'esac',
         'echo "fake npm: $stage running"',
@@ -293,6 +298,13 @@ describe('a preview run', { skip: POSIX ? false : 'needs a POSIX shell' }, () =>
             + `(${SKIP_MOBILE.name}=${SKIP_MOBILE.value})`));
     });
 
+    it('says the build stage is a preview build, not a release one', async () => {
+        const { output } = await runRunner([ 'build' ]);
+
+        assert.ok(output.includes(
+            '[preview] stage build: preview build profile, heap sized to this machine (make preview)'));
+    });
+
     it('leaves the other stages\' environment alone', async () => {
         const { output } = await runRunner([ 'build', 'start' ]);
 
@@ -305,5 +317,124 @@ describe('a preview run', { skip: POSIX ? false : 'needs a POSIX shell' }, () =>
         const { output } = await runRunner([ 'build' ]);
 
         assert.ok(output.includes('fake npm: build running'));
+    });
+});
+
+/**
+ * The recipe lines of a Makefile target, without the leading tabs and with
+ * line continuations joined.
+ *
+ * @param {string} makefile - The Makefile source.
+ * @param {string} target - The target name.
+ * @returns {string} The recipe, one command per line.
+ */
+function recipeOf(makefile, target) {
+    const lines = makefile.split('\n');
+    const start = lines.findIndex(line => line.startsWith(`${target}:`));
+
+    assert.notStrictEqual(start, -1, `the Makefile has no ${target} target`);
+
+    const recipe = [];
+
+    for (const line of lines.slice(start + 1)) {
+        if (!line.startsWith('\t')) {
+            break;
+        }
+        recipe.push(line.slice(1));
+    }
+
+    return recipe.join('\n').replace(/\\\n\s*/g, ' ');
+}
+
+/**
+ * The prerequisites of a Makefile target.
+ *
+ * @param {string} makefile - The Makefile source.
+ * @param {string} target - The target name.
+ * @returns {string[]} The prerequisite names, in order.
+ */
+function prerequisitesOf(makefile, target) {
+    const line = makefile.split('\n').find(candidate => candidate.startsWith(`${target}:`));
+
+    assert.ok(line, `the Makefile has no ${target} target`);
+
+    return line.slice(target.length + 1).trim()
+        .split(/\s+/)
+        .filter(Boolean);
+}
+
+/**
+ * The entries the webpack preview profile builds, read out of its own source.
+ *
+ * Requiring `webpack.config.js` here would pull in the whole build toolchain
+ * for one array; the list is what matters and it is written literally.
+ *
+ * @returns {string[]} The entry names.
+ */
+function previewEntries() {
+    const source = fs.readFileSync(path.join(ROOT, 'webpack.config.js'), 'utf8');
+    const block = source.match(/const PREVIEW_ENTRIES = \[([^\]]+)\]/);
+
+    assert.ok(block, 'webpack.config.js no longer declares PREVIEW_ENTRIES');
+
+    return block[1].match(/'([^']+)'/g).map(quoted => quoted.slice(1, -1));
+}
+
+describe('the preview build', () => {
+    const makefile = fs.readFileSync(path.join(ROOT, 'Makefile'), 'utf8');
+    const scripts = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).scripts;
+
+    it('is what the build stage runs', () => {
+        assert.deepStrictEqual(STAGES.build.args, [ 'run', 'build:preview' ]);
+        assert.strictEqual(scripts['build:preview'], 'make preview');
+    });
+
+    it('leaves the release build alone', () => {
+        assert.strictEqual(scripts.build, 'make all');
+        assert.deepStrictEqual(prerequisitesOf(makefile, 'all'), [ 'compile', 'deploy' ]);
+        assert.ok(recipeOf(makefile, 'compile').includes('--max-old-space-size=8192'));
+    });
+
+    it('turns the preview profile on and sizes the heap to the machine', () => {
+        const recipe = recipeOf(makefile, 'compile-preview');
+
+        assert.ok(recipe.includes('MEETSPACE_PREVIEW=1'), recipe);
+        assert.ok(recipe.includes('--max-old-space-size=$(PREVIEW_HEAP_MB)'), recipe);
+        assert.ok(makefile.includes('PREVIEW_HEAP_MB = $(shell node scripts/heap-size.js'), makefile);
+    });
+
+    it('deploys the preview app bundle rather than the full one', () => {
+        assert.deepStrictEqual(
+            prerequisitesOf(makefile, 'preview'),
+            [ 'compile-preview', 'deploy-preview' ]);
+
+        const deploy = prerequisitesOf(makefile, 'deploy-preview');
+
+        assert.ok(deploy.includes('deploy-appbundle-preview'));
+        assert.ok(!deploy.includes('deploy-appbundle'));
+    });
+
+    it('copies every bundle the preview profile emits, and nothing else', () => {
+        const recipe = recipeOf(makefile, 'deploy-appbundle-preview');
+        const copied = (recipe.match(/\$\(BUILD_DIR\)\/[\w.-]+\.js/g) || [])
+            .map(file => file.replace('$(BUILD_DIR)/', '').replace('.min.js', ''));
+
+        assert.deepStrictEqual([ ...copied ].sort(), [ ...previewEntries() ].sort());
+    });
+
+    it('copies no source map, because the preview profile builds none', () => {
+        assert.ok(!recipeOf(makefile, 'deploy-appbundle-preview').includes('.map'));
+        assert.ok(recipeOf(makefile, 'deploy-appbundle').includes('.map'));
+    });
+
+    it('deploys every asset the full build deploys', () => {
+        const full = prerequisitesOf(makefile, 'deploy')
+            .filter(target => target !== 'deploy-appbundle');
+
+        for (const target of full) {
+            assert.ok(
+                prerequisitesOf(makefile, 'deploy-preview').includes(target),
+                `the preview deploy is missing ${target}`);
+        }
     });
 });

@@ -13,6 +13,11 @@ MEDIAPIPE_SEGMENTATION_DIR = node_modules/@mediapipe/selfie_segmentation
 FACE_MODELS_DIR = node_modules/@vladmandic/human-models/models
 NODE_SASS = ./node_modules/.bin/sass
 NPM = npm
+# The heap ceiling for a preview build, derived from the machine this runs on
+# rather than assumed. Recursively expanded on purpose: only the preview
+# targets reference it, so a full build never pays for it. The fallback keeps
+# a broken sizer from producing an empty --max-old-space-size=.
+PREVIEW_HEAP_MB = $(shell node scripts/heap-size.js || echo 2048)
 OUTPUT_DIR = .
 STYLES_BUNDLE = css/all.bundle.css
 STYLES_DESTINATION = css/all.css
@@ -29,6 +34,17 @@ all: compile deploy
 
 compile: clean
 	NODE_OPTIONS=--max-old-space-size=8192 \
+	$(WEBPACK)
+
+# A build for a preview host: the webpack preview profile (fewer bundles, no
+# source maps -- see PREVIEW_ENTRIES in webpack.config.js) and a heap the
+# machine can actually back. `make all` is unchanged; this is a second way in,
+# not a variant of the first.
+preview: compile-preview deploy-preview
+
+compile-preview: clean
+	MEETSPACE_PREVIEW=1 \
+	NODE_OPTIONS=--max-old-space-size=$(PREVIEW_HEAP_MB) \
 	$(WEBPACK)
 
 clean:
@@ -64,6 +80,28 @@ deploy-appbundle:
 		$(BUILD_DIR)/close3.min.js \
 		$(BUILD_DIR)/close3.min.js.map \
 		$(DEPLOY_DIR) || true
+	cp -r $(BUILD_DIR)/chunks $(DEPLOY_DIR)/chunks
+
+# The deploy of a preview build. Identical to `deploy` but for the app bundle
+# copy: every other target copies assets out of node_modules, which the preview
+# profile does not change.
+.NOTPARALLEL:
+deploy-preview: deploy-init deploy-appbundle-preview deploy-rnnoise-binary deploy-excalidraw deploy-tflite deploy-meet-models deploy-mediapipe-segmentation deploy-lib-jitsi-meet deploy-olm deploy-tf-wasm deploy-css deploy-local deploy-face-landmarks
+
+# Only the bundles the preview profile emits, and no source maps -- it does not
+# build them. Copying anything else would fail the deploy over a file the build
+# was never asked to produce, which the preview log can only report as the
+# build stage failing. This list is PREVIEW_ENTRIES in webpack.config.js;
+# scripts/preview.test.js holds the two together.
+deploy-appbundle-preview:
+	cp \
+		$(BUILD_DIR)/app.bundle.min.js \
+		$(BUILD_DIR)/external_api.min.js \
+		$(BUILD_DIR)/face-landmarks-worker.min.js \
+		$(BUILD_DIR)/noise-suppressor-worklet.min.js \
+		$(BUILD_DIR)/screenshot-capture-worker.min.js \
+		$(BUILD_DIR)/vb-inference-worker.min.js \
+		$(DEPLOY_DIR)
 	cp -r $(BUILD_DIR)/chunks $(DEPLOY_DIR)/chunks
 
 deploy-lib-jitsi-meet:

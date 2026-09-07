@@ -80,10 +80,12 @@ const STAGES = {
         note: `mobile install steps opted out (${SKIP_MOBILE.name}=${SKIP_MOBILE.value})`
     },
     build: {
-        args: [ 'run', 'build' ],
+        args: [ 'run', 'build:preview' ],
         command: NPM,
-        hint: 'compilation failed. `npm run build` is webpack plus the asset deploy; '
-            + 'a kill by signal here is usually the machine running out of memory.'
+        hint: 'compilation failed. `npm run build:preview` is webpack plus the asset deploy; '
+            + 'a kill by signal here is usually the machine running out of memory, and the '
+            + 'heap the build asked for is on the [heap-size] line above.',
+        note: 'preview build profile, heap sized to this machine (make preview)'
     },
     start: {
         args: [ 'start' ],
