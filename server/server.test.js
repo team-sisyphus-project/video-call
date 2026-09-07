@@ -57,6 +57,36 @@ function createFixtureRoot() {
     return root;
 }
 
+/**
+ * Evaluates the generated `config.js` the way the browser does.
+ *
+ * @param {Object} [env] - The environment to generate for.
+ * @returns {Object} The `config` object the client would read.
+ */
+function evaluateConfig(env = {}) {
+    // eslint-disable-next-line no-new-func
+    return new Function(`${buildConfigJs(env)}\nreturn config;`)();
+}
+
+/**
+ * Reads the toolbar button keys from the client's own constants.
+ *
+ * An unknown key in `toolbarButtons` does not fail anywhere: the client simply
+ * never matches it, and the button quietly stays missing. Reading the keys the
+ * client actually declares turns that into a test failure.
+ *
+ * @returns {Array<string>} Every button key the client understands.
+ */
+function readKnownToolbarButtons() {
+    const source = fs.readFileSync(
+        path.join(__dirname, '../react/features/toolbox/constants.ts'), 'utf8');
+    const declaration = (/export const TOOLBAR_BUTTONS: ToolbarButton\[\] = \[([^\]]*)\]/).exec(source);
+
+    assert.ok(declaration, 'TOOLBAR_BUTTONS was not found in the client constants');
+
+    return declaration[1].match(/'[^']+'/g).map(quoted => quoted.slice(1, -1));
+}
+
 describe('readPort', () => {
     it('defaults when PORT is absent or empty', () => {
         assert.strictEqual(readPort({}), 8080);
@@ -111,10 +141,135 @@ describe('buildConfigJs', () => {
     });
 
     it('evaluates to a config object', () => {
-        // eslint-disable-next-line no-new-func
-        const config = new Function(`${buildConfigJs({})}\nreturn config;`)();
+        assert.strictEqual(evaluateConfig().hosts.domain, 'alpha.jitsi.net');
+    });
+});
 
-        assert.strictEqual(config.hosts.domain, 'alpha.jitsi.net');
+describe('the toolbar the configuration serves', () => {
+    const PRIMARY_BUTTONS = [
+        'microphone',
+        'camera',
+        'desktop',
+        'chat',
+        'participants-pane',
+        'raisehand'
+    ];
+
+    it('enables the primaries and the leave button', () => {
+        const { toolbarButtons } = evaluateConfig();
+
+        for (const button of [ ...PRIMARY_BUTTONS, 'hangup' ]) {
+            assert.ok(toolbarButtons.includes(button), `${button} is not enabled`);
+        }
+    });
+
+    it('keeps the secondary actions available, for the "More" menu to hold', () => {
+        const { toolbarButtons } = evaluateConfig();
+
+        for (const button of [
+            'tileview',
+            'fullscreen',
+            'select-background',
+            'videoquality',
+            'security',
+            'closedcaptions',
+            'noisesuppression',
+            'sharedvideo',
+            'shareaudio',
+            'whiteboard',
+            'stats',
+            'settings',
+            'shortcuts',
+            'profile',
+            'help'
+        ]) {
+            assert.ok(toolbarButtons.includes(button), `${button} is not reachable`);
+        }
+    });
+
+    it('drops the actions this deployment has no backend for', () => {
+        const { toolbarButtons } = evaluateConfig();
+
+        for (const button of [ 'recording', 'livestreaming', 'highlight', 'invite', 'linktosalesforce' ]) {
+            assert.ok(!toolbarButtons.includes(button), `${button} is offered without a backend`);
+        }
+    });
+
+    it('is an allowlist, so every button it names is a button the client knows', () => {
+        const { toolbarButtons } = evaluateConfig();
+        const known = readKnownToolbarButtons();
+
+        for (const button of toolbarButtons) {
+            assert.ok(known.includes(button), `${button} is not a toolbar button`);
+        }
+
+        assert.strictEqual(new Set(toolbarButtons).size, toolbarButtons.length, 'a button is listed twice');
+    });
+
+    it('fills the widest bar row with the primaries, then the two viewing controls', () => {
+        const { mainToolbarButtons } = evaluateConfig();
+
+        assert.deepStrictEqual(mainToolbarButtons[0], [ ...PRIMARY_BUTTONS, 'tileview', 'fullscreen' ]);
+    });
+
+    it('leads every row with primaries, so a narrower window drops secondaries first', () => {
+        for (const row of evaluateConfig().mainToolbarButtons) {
+            const lead = row.slice(0, Math.min(row.length, PRIMARY_BUTTONS.length));
+
+            assert.deepStrictEqual(
+                lead.filter(button => !PRIMARY_BUTTONS.includes(button)),
+                [],
+                `${row.join(', ')} does not lead with the primaries`);
+        }
+    });
+
+    it('addresses one main bar row per width the client offers, from 8 down to 2', () => {
+        const { mainToolbarButtons } = evaluateConfig();
+
+        assert.deepStrictEqual(mainToolbarButtons.map(row => row.length), [ 8, 7, 6, 5, 4, 3, 2 ]);
+    });
+
+    it('never widens the bar past the eight slots the primaries were sized for', () => {
+        const { mainToolbarButtons } = evaluateConfig();
+
+        // The client keeps 9 and 10 slot rows that only exist once configured.
+        // Overriding them would grow the bar instead of focusing it.
+        assert.ok(mainToolbarButtons.every(row => row.length <= 8));
+    });
+
+    it('puts nothing in the bar that is not enabled', () => {
+        const { mainToolbarButtons, toolbarButtons } = evaluateConfig();
+
+        for (const row of mainToolbarButtons) {
+            for (const button of row) {
+                assert.ok(toolbarButtons.includes(button), `${button} is in the bar but not enabled`);
+            }
+        }
+    });
+
+    it('leaves every enabled button that is not in the widest row to the "More" menu', () => {
+        const { mainToolbarButtons, toolbarButtons } = evaluateConfig();
+        const [ widestRow ] = mainToolbarButtons;
+
+        // 'hangup' is rendered next to the bar rather than in it.
+        const overflow = toolbarButtons.filter(
+            button => !widestRow.includes(button) && button !== 'hangup');
+
+        assert.deepStrictEqual(overflow, [
+            'select-background',
+            'videoquality',
+            'security',
+            'closedcaptions',
+            'noisesuppression',
+            'sharedvideo',
+            'shareaudio',
+            'whiteboard',
+            'stats',
+            'settings',
+            'shortcuts',
+            'profile',
+            'help'
+        ]);
     });
 });
 

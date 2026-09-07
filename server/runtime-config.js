@@ -49,6 +49,80 @@ function readBackend(env) {
 }
 
 /**
+ * The buttons a conference may offer at all.
+ *
+ * `toolbarButtons` is an allowlist, not a toolbar layout: it decides what
+ * exists, and the client then splits it between the main bar and the "More"
+ * menu. Left undefined, the client enables every button it knows about, which
+ * is how the default deployment ends up with a crowded bar.
+ *
+ * The primaries lead the list; everything after them is reachable under
+ * "More". Omitted on purpose, because this deployment has no backend for them:
+ * `recording`, `livestreaming` and `highlight` (no recorder), `invite` (no
+ * dial-in or invitation service) and `linktosalesforce` (no CRM). A deployment
+ * that runs those services re-enables them by adding the key back here.
+ */
+const TOOLBAR_BUTTONS = [
+
+    // The primaries MAIN_TOOLBAR_BUTTONS keeps in the bar, plus leaving, which
+    // the client renders beside the bar rather than in it.
+    'microphone',
+    'camera',
+    'desktop',
+    'chat',
+    'participants-pane',
+    'raisehand',
+    'hangup',
+
+    // Secondaries. Reachable, but through the "More" menu.
+    'tileview',
+    'fullscreen',
+    'select-background',
+    'videoquality',
+    'security',
+    'closedcaptions',
+    'noisesuppression',
+    'sharedvideo',
+    'shareaudio',
+    'whiteboard',
+    'stats',
+    'settings',
+    'shortcuts',
+    'profile',
+    'help'
+];
+
+/**
+ * What the main toolbar shows, per width.
+ *
+ * The client picks one of these by *length*: it keeps a table of width
+ * thresholds, each holding a fixed number of slots, and replaces the order of
+ * the entry whose slot count matches the length of one of these arrays. So the
+ * length of each array is the width it addresses, and the position in the
+ * array is the position in the bar.
+ *
+ * On web the table runs from 8 slots (wide) down to 2 (narrow), and the bar
+ * always fills its slots: a shorter list does not make a shorter bar, it just
+ * lets the client pick the remainder itself. The 9 and 10 slot entries the
+ * client also accepts are deliberately not overridden here: they are inert
+ * unless configured, and configuring them would make the bar wider than the
+ * focused set, not narrower.
+ *
+ * The two widest rows therefore carry the six primaries plus the two viewing
+ * controls that would otherwise be chosen for us. "More" and "Leave" are
+ * rendered outside this list and do not take a slot.
+ */
+const MAIN_TOOLBAR_BUTTONS = [
+    [ 'microphone', 'camera', 'desktop', 'chat', 'participants-pane', 'raisehand', 'tileview', 'fullscreen' ],
+    [ 'microphone', 'camera', 'desktop', 'chat', 'participants-pane', 'raisehand', 'tileview' ],
+    [ 'microphone', 'camera', 'desktop', 'chat', 'participants-pane', 'raisehand' ],
+    [ 'microphone', 'camera', 'desktop', 'chat', 'participants-pane' ],
+    [ 'microphone', 'camera', 'chat', 'participants-pane' ],
+    [ 'microphone', 'camera', 'chat' ],
+    [ 'microphone', 'camera' ]
+];
+
+/**
  * Builds the client configuration object for a backend host.
  *
  * @param {string} backend - The signalling deployment host.
@@ -86,6 +160,10 @@ function buildConfig(backend) {
             muc: `conference.${backend}`
         },
 
+        // The bar carries the controls a call is actually run with; the rest of
+        // TOOLBAR_BUTTONS sits one click away under "More".
+        mainToolbarButtons: MAIN_TOOLBAR_BUTTONS,
+
         p2p: {
             enabled: true
         },
@@ -97,7 +175,9 @@ function buildConfig(backend) {
             hideDisplayName: false
         },
 
-        testing: {}
+        testing: {},
+
+        toolbarButtons: TOOLBAR_BUTTONS
     };
 }
 
