@@ -84,8 +84,10 @@ The demo config deliberately turns off third party requests, analytics and
 rtcstats, enables the welcome page and forces the prejoin screen on, so a first
 time visitor sees the camera preview before anything connects.
 
-`demo/interface_config.js` carries the demo branding (`APP_NAME`,
-`PROVIDER_NAME`, watermark off). Production branding is a separate task.
+`demo/interface_config.js` carries the same MeetSpace branding as the production
+`interface_config.js`: `APP_NAME` and `PROVIDER_NAME` read `MeetSpace`, and
+`DEFAULT_WELCOME_PAGE_LOGO_URL` points at `images/meetspace-watermark.svg`, the
+same header logo a deployment serves. Demo mode is not a stand-in for the brand.
 
 ## Regenerating the shell
 
@@ -110,9 +112,11 @@ On 2026-09-04, `make demo` on macOS with Node 24.20.0:
   so joining a room reaches a live deployment
 - one harmless 404: `/lang/countries-ko.json`, which upstream does not ship
 
-The welcome page still carries upstream Jitsi artwork and copy. Only `APP_NAME`
-and `PROVIDER_NAME` are changed, which is why the browser tab reads MeetSpace
-while the page header does not. Branding is a separate task.
+Branding landed after that run. The page header logo, the browser tab title, the
+favicon and the social preview image are MeetSpace, in demo mode and in a
+deployment alike. What is still upstream sits further down the welcome page: the
+three app store badges in the footer and the support link. Both are listed under
+[Not done yet](README.md#not-done-yet).
 
 ## Running under a preview harness
 

@@ -3,8 +3,9 @@
 A private fork of [jitsi-meet](https://github.com/jitsi/jitsi-meet): browser
 based video meetings, WebRTC, no installs for participants.
 
-This repository is at the "fork it and get it running locally" stage. Nothing
-has been rebranded or restructured beyond what demo mode needs.
+This repository is at the "fork it, brand it, get it running locally" stage. The
+name, the header logo, the favicon and the social preview image are MeetSpace.
+Nothing else has been restructured beyond what demo mode needs.
 
 - Upstream: `jitsi/jitsi-meet`, snapshot taken 2026-09-04
 - Upstream README: [README.upstream.md](README.upstream.md)
@@ -80,7 +81,7 @@ should ever be committed as a value.
 | `PORT` | `8080` | `npm start`, `npm run demo` | Port to listen on. The only variable a preview has to set. |
 | `HOST` | `0.0.0.0` | `npm run demo` | Interface the demo launcher binds. `npm start` always binds `0.0.0.0` and takes no override. |
 | `MEETSPACE_BACKEND` | `alpha.jitsi.net` | `npm start`, `make demo` | Signalling deployment the client connects to. A bare host or a URL; the host is what ends up in the generated `config.js`. |
-| `MEETSPACE_APP_NAME` | unset, keeps `interface_config.js` | `npm start` | Application name shown in the UI, so a deployment can be renamed without a rebuild. |
+| `MEETSPACE_APP_NAME` | unset, keeps `MeetSpace` | `npm start` | Overrides the application name shown in the UI, so a deployment can be renamed without a rebuild. Unset, the checked-in `interface_config.js` value stands. The logo is a file, not a variable, and does not follow the rename. |
 | `WEBPACK_DEV_SERVER_PROXY_TARGET` | `https://alpha.jitsi.net` | `make demo`, `make dev` | Where the dev server forwards signalling, and under `make dev` the shell and config as well. `npm start` does not proxy and does not read it. |
 | `MEETSPACE_HTTPS` | unset, plain HTTP | `make demo` | Serve demo mode over HTTPS instead. |
 | `MEETSPACE_HOST` / `MEETSPACE_PORT` | `localhost` / webpack's default | `make demo`, `make dev` | Interface and port for webpack's own dev server, when running it directly rather than through the launcher. |
@@ -144,7 +145,7 @@ demo/
   start.js               preview launcher, binds the port before webpack is ready
   build-index.js         generates index.demo.html from index.html
   config.js              demo Jitsi config, template
-  interface_config.js    demo branding
+  interface_config.js    demo interface config, same MeetSpace branding
 preview.toml             local preview contract: build, start, $PORT
 harness.config.json      preview harness contract (app block, validation steps)
 DEMO.md                  demo mode documentation
@@ -158,7 +159,8 @@ the dev server config plus host/port env overrides), `Makefile` (the `demo` and
 
 ## Not done yet
 
-- Branding beyond `APP_NAME` in the demo interface config
+- The welcome page below the header: the three upstream app store badges in the
+  footer, and a `community.jitsi.org` support link
 - A self hosted backend (Prosody, Jicofo, JVB), needed for meetings that do not
   depend on someone else's deployment
 - Mobile (React Native) builds
