@@ -15,7 +15,9 @@ has been rebranded or restructured beyond what demo mode needs.
 - Node.js 24 (tested on 24.20.0) and npm 11
 - macOS or Linux, GNU make
 
-## From a clean checkout
+## Running it locally
+
+### From a clean checkout
 
 Three commands, in this order, on a machine with nothing but Node and make:
 
@@ -28,12 +30,20 @@ PORT=5400 npm start    # http://localhost:5400
 Then check it answers:
 
 ```bash
-curl -sI http://127.0.0.1:5400/     # 200, content-type: text/html
+curl -sI http://127.0.0.1:5400/          # 200, content-type: text/html
+curl -sI http://127.0.0.1:5400/StandUp   # 200, the same shell: rooms are paths
 ```
 
-There is no database and no cache, so there is nothing to migrate and nothing to
-seed. There are no accounts either, dummy or otherwise: anyone with the URL opens
-a room, and the room exists because someone opened it.
+That is the whole green-field path, and it is what a deployment and the preview
+run. There is no fourth step:
+
+- **No database and no cache.** Nothing to migrate, nothing to seed. The
+  platform's `DATABASE_URL` and `REDIS_URL` are ignored if they are injected —
+  the app never reads them. Conference state lives in the signalling backend and
+  in the browsers of the people in the room.
+- **No accounts, dummy or otherwise.** There is no sign up, no login and no
+  seeded user to hand a reviewer. Anyone with the URL opens a room, and the room
+  exists because someone opened it.
 
 `npm install` also runs `postinstall`, which applies the `patches/` overrides and
 prepares the React Native side (`jetifier`, autolinking metadata). Those steps
@@ -46,30 +56,47 @@ sass, patch-package) lives in `devDependencies`, and a host that exports
 `NODE_ENV=production` would otherwise skip them and break both the install and
 the build.
 
-## Running it locally
-
-**The production build above is what a deployment and the preview run.**
+### What `npm start` serves
 
 `npm start` (`node server/index.js`) serves everything on one plain HTTP port:
 the built bundles and assets, `config.js` and `interface_config.js` generated
 from the environment, and the application shell for every other path, so room
-URLs like `/StandUp` work. It binds `PORT` (default 8080) on `0.0.0.0` and never
-redirects to https, because TLS is terminated in front of it. It refuses to start
-when the build output is missing rather than serving a broken shell.
-
-Configuration, all optional:
-
-| Variable | Default | What it does |
-| --- | --- | --- |
-| `PORT` | `8080` | Port to listen on |
-| `MEETSPACE_BACKEND` | `alpha.jitsi.net` | Signalling deployment the client connects to |
-| `MEETSPACE_APP_NAME` | unset, keeps `interface_config.js` | Application name shown in the UI |
+URLs like `/StandUp` work. It binds `PORT` on `0.0.0.0` and never redirects to
+https, because TLS is terminated in front of it. It refuses to start when the
+build output is missing, rather than serving a broken shell.
 
 Without a reachable backend the welcome page, the prejoin screen with camera
 preview and the settings surfaces still load; joining a meeting needs the
 backend.
 
-**Demo mode, the webpack dev server with a build-progress page:**
+### Configuration
+
+Everything is an environment variable and everything is optional. No secrets are
+involved, so there is nothing to keep out of the repository — and nothing here
+should ever be committed as a value.
+
+| Variable | Default | Read by | What it does |
+| --- | --- | --- | --- |
+| `PORT` | `8080` | `npm start`, `npm run demo` | Port to listen on. The only variable a preview has to set. |
+| `HOST` | `0.0.0.0` | `npm run demo` | Interface the demo launcher binds. `npm start` always binds `0.0.0.0` and takes no override. |
+| `MEETSPACE_BACKEND` | `alpha.jitsi.net` | `npm start`, `make demo` | Signalling deployment the client connects to. A bare host or a URL; the host is what ends up in the generated `config.js`. |
+| `MEETSPACE_APP_NAME` | unset, keeps `interface_config.js` | `npm start` | Application name shown in the UI, so a deployment can be renamed without a rebuild. |
+| `WEBPACK_DEV_SERVER_PROXY_TARGET` | `https://alpha.jitsi.net` | `make demo`, `make dev` | Where the dev server forwards signalling, and under `make dev` the shell and config as well. `npm start` does not proxy and does not read it. |
+| `MEETSPACE_HTTPS` | unset, plain HTTP | `make demo` | Serve demo mode over HTTPS instead. |
+| `MEETSPACE_HOST` / `MEETSPACE_PORT` | `localhost` / webpack's default | `make demo`, `make dev` | Interface and port for webpack's own dev server, when running it directly rather than through the launcher. |
+
+An invalid `PORT` or `MEETSPACE_BACKEND` stops the process at startup with the
+offending value in the message. Neither is guessed at.
+
+Pointing the production server at your own deployment:
+
+```bash
+PORT=5400 MEETSPACE_BACKEND=meet.example.com npm start
+```
+
+### Demo mode
+
+The webpack dev server with a build-progress page, for working on the client:
 
 ```bash
 npm run demo
@@ -77,13 +104,7 @@ npm run demo
 
 Or `make demo` to run webpack directly without the launcher. `npm run demo`
 binds the port straight away and serves a build-progress page until the dev
-server is compiled; `make demo` gives you the raw webpack output.
-
-To run upstream's proxy-backed dev server instead:
-
-```bash
-npm run dev:upstream
-```
+server has compiled; `make demo` gives you the raw webpack output.
 
 Demo mode opens on http://localhost:8080 (plain HTTP on purpose:
 `http://localhost` is a secure context, so camera access works without a
@@ -92,18 +113,21 @@ checkout, so the welcome page, the prejoin screen with live camera preview,
 device selection, virtual backgrounds and settings all work with no backend at
 all. Point it at a Jitsi deployment and real meetings work too.
 
-See [DEMO.md](DEMO.md) for the details and for how to attach a backend.
+Demo mode is a development convenience, started by hand. It is not the path a
+deployment or the preview takes — that is `npm run build` then `npm start`, as
+declared in `preview.toml`. See [DEMO.md](DEMO.md) for the details and for how to
+attach a backend.
 
-**Upstream dev mode:**
+### Upstream dev mode
 
 ```bash
-make dev
+npm run dev:upstream    # or: make dev
 ```
 
-Same dev server, but `index.html` and `config.js` are proxied from a live Jitsi
-deployment (`WEBPACK_DEV_SERVER_PROXY_TARGET`, default `https://alpha.jitsi.net`).
-Nothing renders when that deployment is unreachable, which is why demo mode
-exists.
+The same dev server, but `index.html` and `config.js` are proxied from a live
+Jitsi deployment (`WEBPACK_DEV_SERVER_PROXY_TARGET`, default
+`https://alpha.jitsi.net`). Nothing renders when that deployment is unreachable,
+which is why demo mode exists.
 
 ## Repository layout
 
