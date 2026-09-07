@@ -108,18 +108,17 @@ The width of the bar is the client's to decide, not ours. It holds a table of
 window widths with a fixed number of slots each (eight down to two on the web)
 and always fills them, so a shorter list does not give a shorter bar, only one
 with buttons nobody chose. The two widest layouts therefore spend their spare
-slots on tile view and full screen rather than leave the choice open. Every
-layout leads with the same controls in the same order, so what a narrow window
-drops is always a secondary one. Leave is rendered beside the bar and never
-takes a slot.
+slots on tile view and full screen rather than leave the choice open. As the
+window narrows those two go first, and only then the primaries, from the back:
+raise hand, then screen share, then participants, until a very narrow window
+keeps microphone and camera alone. Whatever leaves the bar is under "More".
+Leave is rendered beside the bar and never takes a slot.
 
-Two generated values decide all of this, both of them in the `config.js` this
-server writes:
-
-| Value | What it decides |
-| --- | --- |
-| `toolbarButtons` | Which buttons exist at all. One that is missing here is in neither the bar nor "More". |
-| `mainToolbarButtons` | Which of them the bar shows, per window width, and in what order. Whatever is left out is under "More". |
+Two values decide all of this. `toolbarButtons` says which buttons exist at
+all — one that is missing there is in neither the bar nor "More".
+`mainToolbarButtons` says which of them the bar shows, per window width and in
+what order; whatever it leaves out is under "More". Both are written into the
+`config.js` this server generates, and mirrored in `demo/config.js`.
 
 Five buttons are left out of `toolbarButtons` altogether, because this
 deployment has no backend behind them: `recording`, `livestreaming` and
