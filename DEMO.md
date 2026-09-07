@@ -103,7 +103,7 @@ while the page header does not. Branding is a separate task.
 
 ## Running under a preview harness
 
-`npm start` runs `demo/start.js`, which exists because a jitsi-meet dev server
+`npm run demo` runs `demo/start.js`, which exists because a jitsi-meet dev server
 cannot satisfy a readiness probe on its own: the asset deploy plus the first
 webpack compile take minutes before anything binds a port, so the harness gives
 up with `port_not_bound`.
@@ -120,7 +120,7 @@ The port therefore responds from the first second and never goes down during
 the handover. HMR and the proxied XMPP socket both survive it.
 
 ```bash
-npm start --                      # port 8080
+npm run demo                      # port 8080
 node demo/start.js --port 5400    # port 5400, harness style
 ```
 
@@ -128,8 +128,9 @@ node demo/start.js --port 5400    # port 5400, harness style
 the launcher exits non-zero if it is already in use. `PORT` and `HOST` env vars
 work as fallbacks for the two flags.
 
-`harness.config.json` carries the contract: `smokeCommand: npm start`,
-`portBase: 5400`, `portArg: --port`, `demoMode: true`.
+`harness.config.json` carries the contract: `smokeCommand: node demo/start.js`,
+`portBase: 5400`, `portArg: --port`, `demoMode: true`. `npm start` is the
+production server (`server/index.js`), not this launcher; see the README.
 
 `hashRouting` is `false`, and that is deliberate. jitsi-meet routes rooms by
 path (`/RoomName`) and the shell carries `<base href="/">`. The demo dev server
