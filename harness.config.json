@@ -1,12 +1,11 @@
 {
   "name": "meetspace",
   "app": {
-    "smokeCommand": "node demo/start.js",
-    "portBase": 5400,
-    "portArg": "--port",
-    "strictPortArg": "--strictPort",
+    "buildCommand": "npm run build",
+    "smokeCommand": "npm start",
+    "portEnv": "PORT",
     "hashRouting": false,
-    "demoMode": true
+    "demoMode": false
   },
   "validation": {
     "steps": [
@@ -29,8 +28,8 @@
     ]
   },
   "notes": {
-    "hashRouting": "jitsi-meet routes rooms by path (/RoomName). The demo dev server answers any non-asset path with the app shell, so path routing survives a root-mounted proxy. It does not survive being mounted under a sub-path.",
-    "startup": "node demo/start.js binds the assigned port immediately and serves a build-progress page, then proxies to the webpack dev server once it answers. The first compile takes minutes; the port never stops responding. Invoked directly rather than through npm start, because npm swallows unknown flags and would drop --port.",
-    "externalDependencies": "None to start or browse. Signalling is proxied to WEBPACK_DEV_SERVER_PROXY_TARGET only when a room is actually joined."
+    "hashRouting": "jitsi-meet routes rooms by path (/RoomName). The production server answers any non-asset path with the app shell, so path routing survives a root-mounted proxy. It does not survive being mounted under a sub-path.",
+    "startup": "npm run build compiles the bundles and deploys the assets into build/; npm start runs server/index.js, which binds the port from PORT (no flags) and refuses to start if the build output is missing. Demo mode (node demo/start.js, npm run demo) is a separate development path and is not what the preview runs.",
+    "externalDependencies": "None to build, start or browse. Signalling is only contacted once a room is actually joined, at the backend named by MEETSPACE_BACKEND."
   }
 }

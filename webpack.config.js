@@ -122,8 +122,9 @@ function devServerProxyBypass({ path }) {
     // a file that only exists locally.
     tpath = tpath.replace(/^\/[^/]+\/static\//, '/static/');
 
+    // `/demo/` is demo mode's own configuration, served from this checkout
+    // rather than from the proxy target.
     if (tpath.startsWith('/css/')
-            // Demo mode serves its config files from this checkout.
             || tpath.startsWith('/demo/')
             || tpath.startsWith('/doc/')
             || tpath.startsWith('/fonts/')
@@ -356,6 +357,7 @@ function getDevServerConfig() {
                 }
             }
         ],
+
         // Demo mode defaults to plain HTTP so there is no self signed
         // certificate warning to click through. http://localhost is still a
         // secure context, so camera and microphone access works. Set

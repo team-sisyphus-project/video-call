@@ -20,7 +20,7 @@ var MEETSPACE_BACKEND = '__MEETSPACE_BACKEND__';
 var config = {
     hosts: {
         domain: MEETSPACE_BACKEND,
-        muc: 'conference.' + MEETSPACE_BACKEND
+        muc: `conference.${MEETSPACE_BACKEND}`
     },
 
     // Same origin, proxied to MEETSPACE_BACKEND by the dev server.

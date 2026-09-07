@@ -4,10 +4,23 @@ Demo mode exists so the product can be opened, explored and actually used
 locally, without standing up Prosody, Jicofo and a videobridge first.
 
 ```bash
-make demo
+npm run demo
 ```
 
-Then open **http://localhost:8080**.
+Then open **http://localhost:8080**. `make demo` runs the same thing without the
+launcher described at the end of this document.
+
+**This is not how the app is deployed.** A deployment and the platform preview
+build once and run the production server:
+
+```bash
+npm run build && PORT=5400 npm start
+```
+
+That path is declared in `preview.toml` and documented in the README under
+[Running it locally](README.md#running-it-locally), including the full
+environment variable table. Demo mode is a development convenience, started by
+hand; everything below describes it.
 
 Demo mode serves over plain HTTP on purpose: `http://localhost` counts as a
 secure context, so camera and microphone access still works, and there is no
@@ -103,7 +116,7 @@ while the page header does not. Branding is a separate task.
 
 ## Running under a preview harness
 
-`npm start` runs `demo/start.js`, which exists because a jitsi-meet dev server
+`npm run demo` runs `demo/start.js`, which exists because a jitsi-meet dev server
 cannot satisfy a readiness probe on its own: the asset deploy plus the first
 webpack compile take minutes before anything binds a port, so the harness gives
 up with `port_not_bound`.
@@ -120,7 +133,7 @@ The port therefore responds from the first second and never goes down during
 the handover. HMR and the proxied XMPP socket both survive it.
 
 ```bash
-npm start --                      # port 8080
+npm run demo                      # port 8080
 node demo/start.js --port 5400    # port 5400, harness style
 ```
 
@@ -128,8 +141,10 @@ node demo/start.js --port 5400    # port 5400, harness style
 the launcher exits non-zero if it is already in use. `PORT` and `HOST` env vars
 work as fallbacks for the two flags.
 
-`harness.config.json` carries the contract: `smokeCommand: npm start`,
-`portBase: 5400`, `portArg: --port`, `demoMode: true`.
+`preview.toml` and `harness.config.json` describe the production path, not this
+launcher: `npm run build` then `npm start`, with the port read from `PORT`. See
+the README's [Running it locally](README.md#running-it-locally) for that path and
+for which variables each command reads.
 
 `hashRouting` is `false`, and that is deliberate. jitsi-meet routes rooms by
 path (`/RoomName`) and the shell carries `<base href="/">`. The demo dev server

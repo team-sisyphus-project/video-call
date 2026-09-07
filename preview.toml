@@ -1,0 +1,15 @@
+# Local preview contract for meetspace.
+#
+# The backend (server/index.js) serves the built frontend from `build/` and the
+# static assets deployed next to it, so a single process on a single port is the
+# whole app. The port is never written down here: the server reads it from the
+# PORT environment variable that the preview platform injects.
+
+model = "server"
+
+[build]
+command = "npm run build"
+
+[serve]
+command = "npm start"
+port_env = "PORT"
