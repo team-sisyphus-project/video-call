@@ -17,6 +17,11 @@
  *     [meetspace] STAGE=start STATUS=ready url=http://0.0.0.0:8080
  *     [meetspace] STAGE=start STATUS=failed REASON=build-output-missing
  *
+ * That ready line is only written once this process has asked itself for `/`
+ * and been answered 200. A bound socket is not a served application, and the
+ * gap between the two is exactly where a readiness probe times out with nothing
+ * in the log to explain it.
+ *
  * The prefix is this process's own, not the runner's: `scripts/preview.js`
  * prints exactly one `[preview] STAGE=` line per run and these lines must not
  * be mistaken for it. They are the evidence the runner quotes, not the verdict.
@@ -69,7 +74,10 @@ const STARTUP_REASONS = {
     'internal': 'startup failed for a reason this server does not recognise; the line above is all of it.',
     'port-invalid': 'PORT must be an integer between 1 and 65535; no socket was ever opened.',
     'port-unavailable': 'the port could not be bound, so nothing is listening and a readiness probe '
-        + 'against it can only time out.'
+        + 'against it can only time out.',
+    'readiness-check-failed': 'the port is open but this server did not serve the application over it, '
+        + 'so a probe that reaches this process still gets an error; the failure above is what the '
+        + 'probe would see too.'
 };
 
 /**
@@ -110,6 +118,16 @@ const REQUIRED_BUILD_OUTPUTS = [
  * can get.
  */
 const ASSET_MAX_AGE = 3600;
+
+/**
+ * How long the readiness self-request may take before startup calls it failed.
+ *
+ * Bounded once rather than retried: a server that cannot answer its own first
+ * request in this long is not slow, it is broken, and retrying only moves the
+ * failure to the preview runner's preparation timeout, where it arrives without
+ * a reason.
+ */
+const READINESS_TIMEOUT = 5000;
 
 /**
  * Builds an error that already knows why startup cannot continue.
@@ -369,11 +387,23 @@ function sendFile(req, res, { filePath, log, stats }) {
  */
 function createRequestHandler({ env = process.env, log = console.log, root = REPO_ROOT } = {}) {
     const documentRoot = path.resolve(root);
-    const shell = Buffer.from(
-        renderShell({
-            onMissingInclude: virtualPath => log(`include not found, skipping: ${virtualPath}`),
-            root: documentRoot
-        }));
+    let shell = null;
+
+    try {
+        shell = Buffer.from(
+            renderShell({
+                onMissingInclude: virtualPath => log(`include not found, skipping: ${virtualPath}`),
+                root: documentRoot
+            }));
+    } catch (error) {
+        // A shell that cannot be rendered is a failure of what this server
+        // serves, not of the server itself, so it is answered rather than
+        // thrown: the readiness check then meets it as a probe would and names
+        // it, instead of the process dying at construction with a stack trace.
+        // The cause is written here because the response must not carry it.
+        log(`${LOG_PREFIX} the application shell could not be rendered: ${error.message}`);
+    }
+
     const generated = new Map([
         [ '/config.js', Buffer.from(buildConfigJs(env)) ],
         [ '/interface_config.js', Buffer.from(buildInterfaceConfigJs({ env,
@@ -419,6 +449,12 @@ function createRequestHandler({ env = process.env, log = console.log, root = REP
             return;
         }
 
+        if (!shell) {
+            sendText(res, 500, 'Application shell unavailable');
+
+            return;
+        }
+
         // Any other path is a room name: the client router resolves it.
         sendBuffer(req, res, {
             body: shell,
@@ -429,21 +465,91 @@ function createRequestHandler({ env = process.env, log = console.log, root = REP
 }
 
 /**
+ * Asks this server for the application, the way a readiness probe will.
+ *
+ * `/` rather than a dedicated health path: a probe answered by an endpoint that
+ * proves only that the process is alive is the exact failure this check exists
+ * to catch. The request goes to the loopback address regardless of the bound
+ * address, because it must not depend on the machine being reachable from
+ * outside itself.
+ *
+ * @param {Object} options - The options.
+ * @param {number} options.port - The port the server is listening on.
+ * @param {number} [options.timeout] - How long to wait for the answer.
+ * @returns {Promise<void>} Resolves when the server answered 200, rejects with
+ * a `readiness-check-failed` error otherwise.
+ */
+function checkReadiness({ port, timeout = READINESS_TIMEOUT }) {
+    const target = `GET http://127.0.0.1:${port}/`;
+
+    return new Promise((resolve, reject) => {
+        const request = http.get({
+            // No connection pooling: a socket kept alive by the agent would
+            // outlive this request and hold the process open past its verdict.
+            agent: false,
+            headers: { 'user-agent': `${LOG_PREFIX} readiness-check` },
+            host: '127.0.0.1',
+            path: '/',
+            port
+        }, response => {
+            const status = response.statusCode;
+
+            // Drained even when it is about to be discarded, so the socket ends
+            // rather than being torn down under the server.
+            response.resume();
+            response.on('end', () => {
+                if (status === 200) {
+                    resolve();
+
+                    return;
+                }
+
+                reject(startupError(
+                    'readiness-check-failed',
+                    `${target} answered ${status}, expected 200`));
+            });
+        });
+
+        request.setTimeout(timeout, () => {
+            request.destroy(startupError(
+                'readiness-check-failed',
+                `${target} did not answer within ${timeout}ms`));
+        });
+
+        request.on('error', error => reject(
+            error.reason
+                ? error
+                : startupError('readiness-check-failed', `${target} failed: ${error.message}`)));
+    });
+}
+
+/**
  * Starts the server.
  *
  * Everything that can be known before a socket is opened is checked first and
- * thrown; binding fails later and asynchronously, so that failure is handed to
- * `onError` instead. Both paths carry a reason.
+ * thrown; binding and serving fail later and asynchronously, so those failures
+ * are handed to `onError` instead. Every path carries a reason.
+ *
+ * The ready line waits for the readiness check, so it means what a probe needs
+ * it to mean: this process answered a request for the application.
  *
  * @param {Object} [options] - The options.
  * @param {string} [options.root] - The repository root to serve from.
  * @param {Object} [options.env] - The environment to read configuration from.
  * @param {Function} [options.log] - Where diagnostics go.
  * @param {Function} [options.onError] - Called with a failure that only shows
- * up once the server tries to bind.
+ * up once the server tries to bind or serve.
+ * @param {number} [options.readinessTimeout] - How long the readiness check may
+ * take.
  * @returns {Object} The listening `http.Server`.
  */
-function start({ env = process.env, log = console.log, onError = failStartup, root = REPO_ROOT } = {}) {
+function start({
+    env = process.env,
+    log = console.log,
+    onError = failStartup,
+    readinessTimeout = READINESS_TIMEOUT,
+    root = REPO_ROOT
+} = {}) {
     const documentRoot = path.resolve(root);
     const missing = missingBuildOutputs(documentRoot);
 
@@ -468,7 +574,17 @@ function start({ env = process.env, log = console.log, onError = failStartup, ro
     });
 
     server.listen(port, DEFAULT_HOST, () => {
-        log(formatReady(port));
+        checkReadiness({ port: server.address().port,
+            timeout: readinessTimeout })
+            .then(() => log(formatReady(port)))
+            .catch(error => {
+                // Nothing is served, so nothing is worth keeping open; the
+                // sockets go with it, or the process would outlive its own
+                // verdict and the preview would wait out its timeout anyway.
+                server.closeAllConnections();
+                server.close(() => { /* reported below, whatever it took */ });
+                onError(error);
+            });
     });
 
     for (const signal of [ 'SIGINT', 'SIGTERM' ]) {
@@ -491,8 +607,10 @@ if (require.main === module) {
 
 module.exports = {
     DEFAULT_PORT,
+    READINESS_TIMEOUT,
     REQUIRED_BUILD_OUTPUTS,
     STARTUP_REASONS,
+    checkReadiness,
     classifyStartupError,
     createRequestHandler,
     failStartup,

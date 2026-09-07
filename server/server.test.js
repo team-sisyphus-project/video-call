@@ -19,6 +19,7 @@ const { contentTypeFor, resolveAsset } = require('./static');
 const {
     REQUIRED_BUILD_OUTPUTS,
     STARTUP_REASONS,
+    checkReadiness,
     classifyStartupError,
     createRequestHandler,
     formatReady,
@@ -509,6 +510,45 @@ describe('the served application', () => {
     });
 });
 
+describe('an application shell that cannot be rendered', () => {
+    let root;
+    let server;
+    let logged;
+
+    before(async () => {
+        root = createFixtureRoot();
+        fs.rmSync(path.join(root, 'index.html'));
+        logged = [];
+        server = http.createServer(createRequestHandler({ env: {},
+            log: line => logged.push(line),
+            root }));
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    });
+
+    after(async () => {
+        await new Promise(resolve => server.close(resolve));
+        fs.rmSync(root, { recursive: true,
+            force: true });
+    });
+
+    it('answers instead of taking the process down at construction', async () => {
+        const response = await fetch(`http://127.0.0.1:${server.address().port}/`);
+
+        assert.strictEqual(response.status, 500);
+    });
+
+    it('says why in the log, where the reader is, and not in the response', async () => {
+        const response = await fetch(`http://127.0.0.1:${server.address().port}/StandUp`);
+        const body = await response.text();
+
+        assert.strictEqual(response.status, 500);
+        assert.ok(!body.includes('index.html'), body);
+        assert.ok(
+            logged.some(line => line.includes('shell could not be rendered') && line.includes('index.html')),
+            logged.join('\n'));
+    });
+});
+
 describe('classifyStartupError', () => {
     it('reads the reason the failure carries', () => {
         for (const reason of Object.keys(STARTUP_REASONS)) {
@@ -560,6 +600,77 @@ describe('formatStartupFailure', () => {
     });
 });
 
+describe('checkReadiness', () => {
+    /**
+     * Runs the readiness check against a server that answers however `answer`
+     * says, and reports what the check made of it.
+     *
+     * @param {Function} answer - The request listener to check against.
+     * @param {number} [timeout] - How long the check may take.
+     * @returns {Promise<Error|null>} The rejection, or null when it passed.
+     */
+    async function checkAgainst(answer, timeout) {
+        const server = http.createServer(answer);
+
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+
+        try {
+            await checkReadiness({ port: server.address().port,
+                timeout });
+
+            return null;
+        } catch (error) {
+            return error;
+        } finally {
+            server.closeAllConnections();
+            await new Promise(resolve => server.close(resolve));
+        }
+    }
+
+    it('passes when the application is served', async () => {
+        assert.strictEqual(await checkAgainst((req, res) => res.end('<html></html>')), null);
+    });
+
+    it('asks for the application itself, not for a liveness endpoint', async () => {
+        const asked = [];
+
+        await checkAgainst((req, res) => {
+            asked.push(req.url);
+            res.end('<html></html>');
+        });
+
+        assert.deepStrictEqual(asked, [ '/' ]);
+    });
+
+    it('fails on a bound port that answers something other than 200', async () => {
+        const error = await checkAgainst((req, res) => {
+            res.writeHead(500);
+            res.end('Application shell unavailable\n');
+        });
+
+        assert.strictEqual(classifyStartupError(error), 'readiness-check-failed');
+        assert.match(error.message, /answered 500, expected 200/);
+    });
+
+    it('fails on a bound port that never answers, within the timeout it was given', async () => {
+        const started = Date.now();
+        const error = await checkAgainst(() => { /* the request is left hanging */ }, 200);
+
+        assert.strictEqual(classifyStartupError(error), 'readiness-check-failed');
+        assert.match(error.message, /did not answer within 200ms/);
+        assert.ok(Date.now() - started < 2000, 'the check waited past its own timeout');
+    });
+
+    it('fails when nothing is listening on the port at all', async () => {
+        const port = await freePort();
+        const error = await checkReadiness({ port,
+            timeout: 1000 }).then(() => null, failure => failure);
+
+        assert.strictEqual(classifyStartupError(error), 'readiness-check-failed');
+        assert.match(error.message, new RegExp(`GET http://127.0.0.1:${port}/ failed:`));
+    });
+});
+
 describe('the server as its own process', () => {
     let root;
 
@@ -602,6 +713,29 @@ describe('the server as its own process', () => {
         for (const file of absent) {
             assert.ok(output.includes(file), `${file} is missing but unnamed in: ${output}`);
         }
+    });
+
+    it('classifies a shell it cannot serve, rather than reporting itself ready', async () => {
+        const unservableRoot = createRunnableRoot();
+
+        // The build is all there; what the server would serve over it is not.
+        fs.rmSync(path.join(unservableRoot, 'index.html'));
+
+        const { code, output } = await runServer({ env: { PORT: String(await freePort()) },
+            root: unservableRoot });
+
+        fs.rmSync(unservableRoot, { recursive: true,
+            force: true });
+
+        assert.notStrictEqual(code, 0);
+        assert.deepStrictEqual(
+            stageLines(output),
+            [ '[meetspace] STAGE=start STATUS=failed REASON=readiness-check-failed' ]);
+
+        // Bound is not served: the process must not have claimed both.
+        assert.ok(!output.includes('STATUS=ready'), output);
+        assert.ok(output.includes('answered 500, expected 200'), output);
+        assert.ok(output.includes('index.html'), output);
     });
 
     it('classifies an unusable PORT and exits non-zero', async () => {
