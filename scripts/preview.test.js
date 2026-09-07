@@ -16,6 +16,7 @@ const { describe, it } = require('node:test');
 const os = require('os');
 const path = require('path');
 
+const { SKIP_MOBILE } = require('./postinstall');
 const {
     MARKER,
     createTail,
@@ -47,6 +48,7 @@ function createFakeNpm() {
         '  *) stage=unknown ;;',
         'esac',
         'echo "fake npm: $stage running"',
+        'echo "fake npm: $stage skip-mobile=[$MEETSPACE_SKIP_MOBILE]"',
         'if [ "$stage" = "$FAIL_AT" ]; then',
         '  echo "noise before the cause" >&2',
         '  echo "the cause: $stage exploded" >&2',
@@ -281,6 +283,22 @@ describe('a preview run', { skip: POSIX ? false : 'needs a POSIX shell' }, () =>
         assert.strictEqual(code, 0);
         assert.ok(output.includes('[preview] stage build: ok'));
         assert.ok(output.includes('fake npm: start running'));
+    });
+
+    it('opts the install stage out of the mobile install work', async () => {
+        const { output } = await runRunner([ 'install', 'build' ]);
+
+        assert.ok(output.includes(`fake npm: install skip-mobile=[${SKIP_MOBILE.value}]`));
+        assert.ok(output.includes('[preview] stage install: mobile install steps opted out '
+            + `(${SKIP_MOBILE.name}=${SKIP_MOBILE.value})`));
+    });
+
+    it('leaves the other stages\' environment alone', async () => {
+        const { output } = await runRunner([ 'build', 'start' ]);
+
+        assert.ok(output.includes('fake npm: build skip-mobile=[]'));
+        assert.ok(output.includes('fake npm: start skip-mobile=[]'));
+        assert.ok(!output.includes('[preview] stage build: mobile install steps opted out'));
     });
 
     it('streams the stage output through as the stage writes it', async () => {

@@ -28,6 +28,8 @@ const { spawn } = require('child_process');
 const os = require('os');
 const path = require('path');
 
+const { SKIP_MOBILE } = require('./postinstall');
+
 const ROOT = path.resolve(__dirname, '..');
 
 /**
@@ -63,14 +65,19 @@ const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 /**
  * The stages, in the order a preview goes through them. `hint` is what a
  * reader most likely needs to know about a failure at that stage, and is
- * printed only when the stage fails.
+ * printed only when the stage fails. `env` is what the stage is run with on
+ * top of this process's environment, and `note` says what that changes — a
+ * preview that quietly does less than a plain `npm install` would be a trap
+ * for whoever reads the log next.
  */
 const STAGES = {
     install: {
         args: [ 'install' ],
         command: NPM,
-        hint: 'dependency installation failed. `npm install` also runs postinstall '
-            + '(patch-package, jetify, Android autolinking); a failure there stops the install.'
+        env: { [SKIP_MOBILE.name]: SKIP_MOBILE.value },
+        hint: 'dependency installation failed. `npm install` also runs postinstall; a failure '
+            + 'there stops the install. The postinstall report names the step that failed.',
+        note: `mobile install steps opted out (${SKIP_MOBILE.name}=${SKIP_MOBILE.value})`
     },
     build: {
         args: [ 'run', 'build' ],
@@ -235,7 +242,9 @@ function formatFailure(result, limit) {
  * @returns {Promise<Object>} The stage result.
  */
 function runStage(stage, { cwd = ROOT, env = process.env } = {}) {
-    const { args, command } = STAGES[stage];
+    const { args, command, env: overrides } = STAGES[stage];
+    const stageEnv = overrides ? { ...env,
+        ...overrides } : env;
     const commandLine = [ command, ...args ].join(' ');
     const tail = createTail(tailLimit(env));
     const startedAt = Date.now();
@@ -243,7 +252,7 @@ function runStage(stage, { cwd = ROOT, env = process.env } = {}) {
     return new Promise(resolve => {
         const child = spawn(command, args, {
             cwd,
-            env,
+            env: stageEnv,
             stdio: [ 'inherit', 'pipe', 'pipe' ]
         });
         let stopped = false;
@@ -331,7 +340,13 @@ async function runStages(stages, options = {}) {
     let last = null;
 
     for (const stage of stages) {
+        const { note } = STAGES[stage];
+
         log(`${PREFIX} stage ${stage}: running`);
+
+        if (note) {
+            log(`${PREFIX} stage ${stage}: ${note}`);
+        }
 
         // Stages are a sequence by definition: nothing may start before the
         // stage before it has finished.
