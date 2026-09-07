@@ -69,6 +69,52 @@ Without a reachable backend the welcome page, the prejoin screen with camera
 preview and the settings surfaces still load; joining a meeting needs the
 backend.
 
+### When the preview does not come up
+
+The preview runs those same three steps as named stages — `install`, `build`,
+`start` — through `scripts/preview.js`, which is what `preview.toml` and
+`harness.config.json` point at: `npm run preview:build` is install plus build,
+`npm run preview:start` is start. The commands underneath are unchanged and
+their output is streamed through untouched. What the runner adds is a name for
+the stage that stopped.
+
+A failed run prints exactly one line of this shape:
+
+```
+[preview] STAGE=build STATUS=failed
+```
+
+Grep the log for `[preview] STAGE=` and read the stage token. That token is the
+classification, and there is never more than one per run:
+
+- `install` — `npm install` failed. It also runs `postinstall` (patch-package,
+  jetify, Android autolinking), so a failure there stops the install.
+- `build` — `npm run build` failed. That is webpack plus the asset deploy; a
+  kill by signal, printed as `exit=137 signal=SIGKILL`, is the machine running
+  out of memory rather than a compile error.
+- `start` — `npm start` did not bring the server up.
+
+Under the marker come the command, the exit status, one line of what that stage
+failing usually means, and the last lines of that stage's own output
+(`PREVIEW_TAIL_LINES` sets how many, default 20). Stages that succeed report as
+`[preview] stage build: ok in 84s` and never use the marker form.
+
+The server classifies its own startup on top of that, under its own prefix so
+the runner's one verdict per run stays the only `[preview] STAGE=` line:
+
+```
+[meetspace] STAGE=start STATUS=ready url=http://0.0.0.0:5400
+[meetspace] STAGE=start STATUS=failed REASON=build-output-missing
+```
+
+`REASON` is one of `build-output-missing` (the build produced nothing to serve;
+the missing files are listed on the next line), `port-invalid`,
+`port-unavailable` or `internal`, and the two lines following it are the failure
+in the server's own words and what that reason means for the reader. The ready
+line is what tells "the application never started" apart from "it started and
+the readiness probe is looking somewhere else": a probe that times out against a
+process that printed it is the second.
+
 ### Configuration
 
 Everything is an environment variable and everything is optional. No secrets are
