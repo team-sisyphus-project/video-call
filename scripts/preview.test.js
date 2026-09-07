@@ -10,11 +10,13 @@
  */
 
 const assert = require('assert');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const { describe, it } = require('node:test');
 const os = require('os');
 const path = require('path');
+
+const { formatReady } = require('../server');
 
 const { SKIP_MOBILE } = require('./postinstall');
 const {
@@ -24,7 +26,8 @@ const {
     exitCodeFor,
     formatExit,
     formatFailure,
-    parseStages
+    parseStages,
+    stoppedBeforeReady
 } = require('./preview');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -34,6 +37,10 @@ const POSIX = process.platform !== 'win32';
 /**
  * Writes a fake `npm` that reports the stage it was asked for and fails at the
  * stage named by `FAIL_AT`, in the way named by `FAIL_MODE`.
+ *
+ * `HANG` makes the start stage stay up until it is signalled, the way the real
+ * server does, and `READY` is the line it writes before it does — empty for a
+ * server that never got that far.
  *
  * The arguments each stage is run with are read from `STAGES` rather than
  * written out here, so renaming the script a stage runs cannot quietly turn
@@ -59,6 +66,15 @@ function createFakeNpm() {
         '  echo "the cause: $stage exploded" >&2',
         '  if [ "$FAIL_MODE" = "signal" ]; then kill -9 $$; fi',
         '  exit 7',
+        'fi',
+        'if [ "$stage" = "start" ] && [ -n "$HANG" ]; then',
+        '  if [ -n "$READY" ]; then echo "$READY"; fi',
+        '  echo "fake npm: start waiting"',
+
+        // A real server leaves with 0 when it is asked to shut down, so this
+        // one does too: the exit status must not be what decides the verdict.
+        '  trap "exit 0" TERM INT',
+        '  while true; do sleep 0.05; done',
         'fi',
         'exit 0',
         ''
@@ -88,6 +104,64 @@ function runRunner(stages, env = {}) {
                 recursive: true });
             resolve({ code: error ? error.code : 0,
                 output: `${stdout}${stderr}` });
+        });
+    });
+}
+
+/**
+ * Runs the preview runner and stops it, the way a preview harness does, once
+ * its output says the stage has got as far as this case needs.
+ *
+ * @param {string[]} stages - The stages to ask for.
+ * @param {Object} env - Extra environment for the fake npm.
+ * @param {string} waitFor - The output to wait for before signalling.
+ * @returns {Promise<Object>} The exit code and the combined output.
+ */
+function runRunnerAndStop(stages, env, waitFor) {
+    const bin = createFakeNpm();
+
+    return new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [ RUNNER, ...stages ], {
+            env: { ...process.env,
+                ...env,
+                PATH: `${bin}${path.delimiter}${process.env.PATH}` }
+        });
+        let output = '';
+        let signalled = false;
+
+        // A runner that never reaches `waitFor` would otherwise hang the suite
+        // rather than fail it.
+        const giveUp = setTimeout(() => {
+            child.kill('SIGKILL');
+            reject(new Error(`the runner never printed "${waitFor}"; it printed:\n${output}`));
+        }, 20000);
+
+        /**
+         * Collects output and stops the runner as soon as it has said enough.
+         *
+         * @param {string} chunk - What the runner just wrote.
+         * @returns {void}
+         */
+        function collect(chunk) {
+            output += chunk;
+
+            if (!signalled && output.includes(waitFor)) {
+                signalled = true;
+                child.kill('SIGTERM');
+            }
+        }
+
+        for (const stream of [ child.stdout, child.stderr ]) {
+            stream.setEncoding('utf8');
+            stream.on('data', collect);
+        }
+
+        child.on('close', code => {
+            clearTimeout(giveUp);
+            fs.rmSync(bin, { force: true,
+                recursive: true });
+            resolve({ code,
+                output });
         });
     });
 }
@@ -194,6 +268,44 @@ describe('formatFailure', () => {
         assert.ok(lines.some(line => line.includes('produced no output')));
     });
 
+    it('reports a start cut short as a readiness failure, not as its usual one', () => {
+        const lines = formatFailure({
+            code: 0,
+            commandLine: 'npm start',
+            durationMs: 61000,
+            ready: false,
+            signal: null,
+            stage: 'start',
+            stopped: true,
+            tail: [ 'the last thing the server printed' ]
+        }, 20);
+
+        assert.deepStrictEqual(
+            lines.filter(line => line.includes(MARKER)),
+            [ '[preview] STAGE=start STATUS=failed' ]);
+        assert.ok(lines.some(line => line === '[preview] stopped on request after 61s, '
+            + 'before the start stage was ready'));
+        assert.ok(lines.some(line => line.includes('stopped before it was ready')));
+        assert.ok(!lines.some(line => line.includes('build output is missing')));
+        assert.ok(lines.some(line => line === '[preview] > the last thing the server printed'));
+    });
+
+    it('keeps the usual hint for a start that was ready and then failed', () => {
+        const lines = formatFailure({
+            code: 1,
+            commandLine: 'npm start',
+            durationMs: 61000,
+            ready: true,
+            signal: null,
+            stage: 'start',
+            stopped: false,
+            tail: []
+        }, 20);
+
+        assert.ok(lines.some(line => line.includes('build output is missing')));
+        assert.ok(!lines.some(line => line.includes('stopped on request')));
+    });
+
     it('says so when the stage could not be started at all', () => {
         const lines = formatFailure({
             code: null,
@@ -206,6 +318,54 @@ describe('formatFailure', () => {
 
         assert.strictEqual(lines[0], '[preview] STAGE=install STATUS=failed');
         assert.ok(lines.some(line => line.includes('could not be started: spawn npm ENOENT')));
+    });
+});
+
+describe('stoppedBeforeReady', () => {
+    it('is true for a start stopped before the server said it was ready', () => {
+        assert.strictEqual(stoppedBeforeReady({ ready: false,
+            stage: 'start',
+            stopped: true }), true);
+    });
+
+    it('is false once the server has said it was ready', () => {
+        assert.strictEqual(stoppedBeforeReady({ ready: true,
+            stage: 'start',
+            stopped: true }), false);
+    });
+
+    it('is false for a start that ended on its own rather than being stopped', () => {
+        assert.strictEqual(stoppedBeforeReady({ ready: false,
+            stage: 'start',
+            stopped: false }), false);
+    });
+
+    it('is false for a stage that has no readiness of its own to be cut short of', () => {
+        assert.strictEqual(stoppedBeforeReady({ ready: false,
+            stage: 'build',
+            stopped: true }), false);
+    });
+});
+
+describe('the start stage readiness signal', () => {
+    it('matches the line the server actually writes', () => {
+        assert.ok(STAGES.start.readyLine.test(formatReady(8080)));
+    });
+
+    it('does not match the server saying it failed', () => {
+        assert.ok(!STAGES.start.readyLine.test('[meetspace] STAGE=start STATUS=failed REASON=port-invalid'));
+    });
+
+    it('does not match the runner quoting a readiness line of its own', () => {
+        assert.ok(!STAGES.start.readyLine.test(`[preview] > ${formatReady(8080)}`));
+    });
+
+    it('is declared for the start stage only', () => {
+        assert.deepStrictEqual(
+            Object.entries(STAGES)
+                .filter(([ , stage ]) => stage.readyLine)
+                .map(([ name ]) => name),
+            [ 'start' ]);
     });
 });
 
@@ -246,6 +406,28 @@ describe('exitCodeFor', () => {
             ok: false,
             stopped: true }), 0);
         assert.strictEqual(exitCodeFor(null), 0);
+    });
+
+    it('succeeds when a start that had reported itself ready is stopped', () => {
+        assert.strictEqual(exitCodeFor({ code: 0,
+            ok: true,
+            ready: true,
+            stage: 'start',
+            stopped: true }), 0);
+    });
+
+    it('fails when a start is stopped before it is ready, however politely it left', () => {
+        assert.strictEqual(exitCodeFor({ code: 0,
+            ok: true,
+            ready: false,
+            stage: 'start',
+            stopped: true }), 1);
+        assert.strictEqual(exitCodeFor({ code: null,
+            ok: false,
+            ready: false,
+            signal: 'SIGTERM',
+            stage: 'start',
+            stopped: true }), 1);
     });
 });
 
@@ -311,6 +493,45 @@ describe('a preview run', { skip: POSIX ? false : 'needs a POSIX shell' }, () =>
         assert.ok(output.includes('fake npm: build skip-mobile=[]'));
         assert.ok(output.includes('fake npm: start skip-mobile=[]'));
         assert.ok(!output.includes('[preview] stage build: mobile install steps opted out'));
+    });
+
+    it('reports a start stopped before the server was ready as a start failure', async () => {
+        const { code, output } = await runRunnerAndStop(
+            [ 'start' ], { HANG: '1' }, 'fake npm: start waiting');
+
+        assert.deepStrictEqual(markerLines(output), [ '[preview] STAGE=start STATUS=failed' ]);
+        assert.notStrictEqual(code, 0);
+        assert.ok(output.includes('[preview] stopped on request'));
+        assert.ok(output.includes('before the start stage was ready'));
+        assert.ok(output.includes('stopped before it was ready'));
+        assert.ok(!output.includes('[preview] stage start: ok'));
+        assert.ok(!output.includes(formatReady(8080)));
+    });
+
+    it('reports a start stopped after the server was ready as a clean teardown', async () => {
+        const ready = formatReady(8080);
+
+        // One tail line, so the ready line has scrolled out of it by the time
+        // the stop arrives: a server that has been up for an hour is the case
+        // that matters, and readiness cannot be read off what survived.
+        const { code, output } = await runRunnerAndStop(
+            [ 'start' ], { HANG: '1',
+                PREVIEW_TAIL_LINES: '1',
+                READY: ready }, 'fake npm: start waiting');
+
+        assert.deepStrictEqual(markerLines(output), []);
+        assert.strictEqual(code, 0);
+        assert.ok(output.includes(ready));
+        assert.ok(output.includes('[preview] stage start: stopped on request after'));
+    });
+
+    it('does not mistake a ready line the build stage merely echoed for its own', async () => {
+        const { code, output } = await runRunnerAndStop(
+            [ 'start' ], { HANG: '1',
+                READY: `[preview] > ${formatReady(8080)}` }, 'fake npm: start waiting');
+
+        assert.deepStrictEqual(markerLines(output), [ '[preview] STAGE=start STATUS=failed' ]);
+        assert.notStrictEqual(code, 0);
     });
 
     it('streams the stage output through as the stage writes it', async () => {

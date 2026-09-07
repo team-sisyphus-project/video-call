@@ -20,6 +20,12 @@
  * output. Exactly one such line is ever printed per run: the first stage to
  * fail ends the run, and stages that succeed are reported without the marker.
  *
+ * The `start` stage is the one that is meant to keep running, so for it a
+ * termination request is not automatically a clean teardown: a preview harness
+ * that gives up waiting for readiness stops the runner exactly the way a human
+ * ending a session does. The two are told apart by the only evidence there is —
+ * whether the server wrote its own ready line before the stop.
+ *
  * Usage: node scripts/preview.js <stage> [stage...]
  * Stages: install, build, start.
  */
@@ -63,12 +69,27 @@ const MAX_PENDING_CHARS = 4096;
 const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 /**
+ * The line the `start` stage's server writes once it has served the application
+ * over its port, and the runner's only evidence that the stage got that far.
+ *
+ * It is the server's own marker, not this runner's — a different prefix, on
+ * purpose, so quoting it can never be mistaken for a verdict. The string is
+ * written in two places, here and in `server/index.js`; `preview.test.js` holds
+ * the two together against the server's `formatReady()`.
+ */
+const READY_LINE = /^\[meetspace] STAGE=start STATUS=ready\b/;
+
+/**
  * The stages, in the order a preview goes through them. `hint` is what a
  * reader most likely needs to know about a failure at that stage, and is
  * printed only when the stage fails. `env` is what the stage is run with on
  * top of this process's environment, and `note` says what that changes — a
  * preview that quietly does less than a plain `npm install` would be a trap
  * for whoever reads the log next.
+ *
+ * A stage that is meant to keep running also declares `readyLine`, the line it
+ * writes once it has done what it was started for, and `stoppedHint`, what a
+ * stop arriving before that line means.
  */
 const STAGES = {
     install: {
@@ -91,7 +112,14 @@ const STAGES = {
         args: [ 'start' ],
         command: NPM,
         hint: 'the application did not start. The server refuses to start when the build '
-            + 'output is missing and names the files it wanted; check the lines above.'
+            + 'output is missing and names the files it wanted; check the lines above.',
+        readyLine: READY_LINE,
+        stoppedHint: 'the application was stopped before it was ready. It never wrote its '
+            + '"STAGE=start STATUS=ready" line, so it was still starting when the stop '
+            + 'arrived — a readiness timeout looks exactly like this. The server writes that '
+            + 'line only once it has served its own request, so the last thing it did print '
+            + 'above is where it got stuck; a run that is merely slow needs a longer readiness '
+            + 'window, not a restart.'
     }
 };
 
@@ -108,9 +136,11 @@ const STAGE_NAMES = Object.keys(STAGES);
  * the most informative line there is.
  *
  * @param {number} limit - How many lines to keep.
+ * @param {Function} [onLine] - Called with each completed line as it arrives,
+ * for callers that need to see output the tail will later drop.
  * @returns {Object} A sink with `write` and `lines`.
  */
-function createTail(limit) {
+function createTail(limit, onLine = () => { /* nothing to watch for */ }) {
     const kept = [];
     let pending = '';
 
@@ -127,6 +157,7 @@ function createTail(limit) {
             return;
         }
 
+        onLine(text);
         kept.push(text);
 
         if (kept.length > limit) {
@@ -195,7 +226,26 @@ function formatExit({ code, error, signal }) {
 }
 
 /**
+ * Whether a stage was stopped on request before it ever reported itself ready.
+ *
+ * Only a stage that says what "ready" looks like can be judged this way; for
+ * every other stage a stop on request is just a stop, because there is no
+ * moment in it that "too early" could be measured against.
+ *
+ * @param {Object} result - The stage result.
+ * @returns {boolean} True when the stop cut the stage short.
+ */
+function stoppedBeforeReady({ ready, stage, stopped }) {
+    const { readyLine } = STAGES[stage] || {};
+
+    return Boolean(stopped && readyLine && !ready);
+}
+
+/**
  * Renders the failure report for a stage.
+ *
+ * A stage stopped before it was ready failed at being ready, not at whatever
+ * that stage usually fails at, so it gets the hint that says so.
  *
  * The marker comes first and appears once. Tail lines are quoted with a `>`
  * and any line of the stage's own output that looks like a marker is dropped,
@@ -206,14 +256,24 @@ function formatExit({ code, error, signal }) {
  * @returns {string[]} The lines to print.
  */
 function formatFailure(result, limit) {
-    const { hint } = STAGES[result.stage];
-    const tail = result.tail.filter(line => !line.includes(MARKER));
+    const { hint, stoppedHint } = STAGES[result.stage];
+    const cutShort = stoppedBeforeReady(result);
     const lines = [
         `${MARKER}${result.stage} STATUS=failed`,
         `${PREFIX} command=${result.commandLine}`,
-        `${PREFIX} ${formatExit(result)}`,
-        `${PREFIX} ${hint}`
+        `${PREFIX} ${formatExit(result)}`
     ];
+    const tail = result.tail.filter(line => !line.includes(MARKER));
+
+    if (cutShort) {
+        // Said outright, because the exit status of a stage that shut down when
+        // asked to says nothing about whether it should have been asked.
+        const seconds = Number.isFinite(result.durationMs) ? ` after ${Math.round(result.durationMs / 1000)}s` : '';
+
+        lines.push(`${PREFIX} stopped on request${seconds}, before the ${result.stage} stage was ready`);
+    }
+
+    lines.push(`${PREFIX} ${cutShort ? stoppedHint : hint}`);
 
     if (result.error) {
         lines.push(`${PREFIX} the ${result.stage} stage could not be started: ${result.error}`);
@@ -247,8 +307,23 @@ function runStage(stage, { cwd = ROOT, env = process.env } = {}) {
     const { args, command, env: overrides } = STAGES[stage];
     const stageEnv = overrides ? { ...env,
         ...overrides } : env;
+    const { readyLine } = STAGES[stage];
     const commandLine = [ command, ...args ].join(' ');
-    const tail = createTail(tailLimit(env));
+    let ready = false;
+
+    /**
+     * Notes the stage's ready line going past. The tail keeps only the last
+     * lines and a long-running stage writes past them, so readiness is decided
+     * as the output arrives, not from what survived.
+     *
+     * @param {string} line - A line the stage wrote.
+     * @returns {void}
+     */
+    function watch(line) {
+        ready = ready || Boolean(readyLine && readyLine.test(line));
+    }
+
+    const tail = createTail(tailLimit(env), watch);
     const startedAt = Date.now();
 
     return new Promise(resolve => {
@@ -310,6 +385,11 @@ function runStage(stage, { cwd = ROOT, env = process.env } = {}) {
          * @returns {void}
          */
         function finish({ code = null, error = null, signal = null }) {
+            const lines = tail.lines();
+
+            // A last line the stage never terminated has not been watched yet;
+            // a server killed mid-write could have its ready line in it.
+            lines.forEach(watch);
             cleanup();
             resolve({
                 code,
@@ -317,10 +397,11 @@ function runStage(stage, { cwd = ROOT, env = process.env } = {}) {
                 durationMs: Date.now() - startedAt,
                 error,
                 ok: code === 0 && !error,
+                ready,
                 signal,
                 stage,
                 stopped,
-                tail: tail.lines()
+                tail: lines
             });
         }
 
@@ -355,6 +436,16 @@ async function runStages(stages, options = {}) {
         // eslint-disable-next-line no-await-in-loop
         last = await runStage(stage, options);
 
+        // Before the clean-teardown case, because a server that shuts down
+        // politely on SIGTERM leaves with a zero exit code whether or not it
+        // ever served anything, and that zero is not an answer to "was it
+        // ready".
+        if (stoppedBeforeReady(last)) {
+            log(formatFailure(last, tailLimit(env)).join('\n'));
+
+            return last;
+        }
+
         if (last.stopped) {
             log(`${PREFIX} stage ${stage}: stopped on request after ${Math.round(last.durationMs / 1000)}s`);
 
@@ -378,11 +469,19 @@ async function runStages(stages, options = {}) {
 /**
  * Turns a stage result into this process's exit code.
  *
+ * A stage stopped before it was ready fails even though it may well have left
+ * with a zero status of its own: it was asked to shut down and did so
+ * correctly, but the thing it was started for never happened.
+ *
  * @param {Object} result - The last stage result, or null when nothing ran.
  * @returns {number} The exit code.
  */
 function exitCodeFor(result) {
-    if (!result || result.ok || result.stopped) {
+    if (!result) {
+        return 0;
+    }
+
+    if (!stoppedBeforeReady(result) && (result.ok || result.stopped)) {
         return 0;
     }
 
@@ -437,6 +536,7 @@ if (require.main === module) {
 module.exports = {
     MARKER,
     PREFIX,
+    READY_LINE,
     STAGES,
     STAGE_NAMES,
     createTail,
@@ -445,5 +545,6 @@ module.exports = {
     formatFailure,
     parseStages,
     runStage,
-    runStages
+    runStages,
+    stoppedBeforeReady
 };
