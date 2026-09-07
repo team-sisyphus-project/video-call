@@ -4,12 +4,24 @@
 # static assets deployed next to it, so a single process on a single port is the
 # whole app. The port is never written down here: the server reads it from the
 # PORT environment variable that the preview platform injects.
+#
+# Both commands go through `scripts/preview.js`, which runs the preview as named
+# stages — install, build, start — and, when one of them fails, prints a single
+# line naming it:
+#
+#     [preview] STAGE=build STATUS=failed
+#
+# followed by the exit status and the tail of that stage's own output. Grep the
+# preview log for `[preview] STAGE=` to find out which stage stopped the run;
+# there is exactly one such line per failed run. The underlying commands are
+# unchanged (`npm install`, `npm run build`, `npm start`) and their output is
+# streamed through as it happens.
 
 model = "server"
 
 [build]
-command = "npm run build"
+command = "npm run preview:build"
 
 [serve]
-command = "npm start"
+command = "npm run preview:start"
 port_env = "PORT"
