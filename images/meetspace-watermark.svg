@@ -1,7 +1,7 @@
 <svg width="71" height="32" viewBox="0 0 71 32" fill="none" xmlns="http://www.w3.org/2000/svg">
 <title>MeetSpace</title>
 <g fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-<path d="M3.15 18.3V10.5L7 15.4L10.85 10.5V18.3"/>
+<path d="M3.25 18.3V10.5L7.05 15.4L10.85 10.5V18.3"/>
 <path d="M13.05 15.7H18.35A2.65 2.65 0 1 0 17.574 17.574"/>
 <path d="M20.45 15.7H25.75A2.65 2.65 0 1 0 24.974 17.574"/>
 <path d="M28.6 9.2V17.3Q28.6 18.35 29.65 18.35"/>

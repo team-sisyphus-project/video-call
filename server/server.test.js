@@ -278,6 +278,15 @@ describe('the checked in branding', () => {
                 assert.ok(fs.existsSync(path.join(REPO_ROOT, 'images/meetspace-watermark.svg')));
             });
 
+            it('points the in-meeting logo at the MeetSpace watermark', () => {
+                // The key has to be present, not merely commented: the config
+                // reducer only reads it via hasOwnProperty, and otherwise falls
+                // back to the upstream 'images/watermark.svg'.
+                assert.strictEqual(
+                    interfaceConfig.DEFAULT_LOGO_URL,
+                    'images/meetspace-watermark.svg');
+            });
+
             it('keeps the header watermark switched on', () => {
                 // The flag gates the header mark itself, not whose mark it is:
                 // turning it off would leave the header with no logo at all.

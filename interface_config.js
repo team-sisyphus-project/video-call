@@ -27,6 +27,12 @@ var interfaceConfig = {
     CLOSE_PAGE_GUEST_HINT: false, // A html text to be shown to guests on the close page, false disables it
 
     DEFAULT_BACKGROUND: '#040404',
+
+    // The in-meeting header watermark. Deprecated in favour of
+    // config.js `defaultLogoUrl`, but it has to stay a real key: the config
+    // reducer only picks it up via hasOwnProperty, and otherwise falls back to
+    // the upstream asset.
+    DEFAULT_LOGO_URL: 'images/meetspace-watermark.svg',
     DEFAULT_WELCOME_PAGE_LOGO_URL: 'images/meetspace-watermark.svg',
 
     DISABLE_DOMINANT_SPEAKER_INDICATOR: false,
@@ -219,7 +225,9 @@ var interfaceConfig = {
     // DEFAULT_LOCAL_DISPLAY_NAME: 'me',
 
     // Please use defaultLogoUrl from config.js
-    // DEFAULT_LOGO_URL: 'images/meetspace-watermark.svg',
+    // DEFAULT_LOGO_URL is set above: the config reducer reads it with
+    // hasOwnProperty, so a commented key silently falls back to the upstream
+    // watermark.
 
     // Please use defaultRemoteDisplayName from config.js
     // DEFAULT_REMOTE_DISPLAY_NAME: 'Fellow Jitster',
