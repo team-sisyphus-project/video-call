@@ -11,6 +11,7 @@ const http = require('http');
 const { after, before, describe, it } = require('node:test');
 const os = require('os');
 const path = require('path');
+const vm = require('vm');
 
 const { buildConfigJs, buildInterfaceConfigJs, readBackend, readServices } = require('./runtime-config');
 const { renderShell } = require('./shell');
@@ -472,6 +473,196 @@ describe('the bar a desktop and a mobile window lay out', () => {
             'fullscreen',
             ...MENU_AT_DESKTOP
         ]);
+    });
+});
+
+describe('the toolbar a browser is served', () => {
+    // A laptop window, and a phone held upright.
+    const DESKTOP_WIDTH = 1280;
+    const MOBILE_WIDTH = 390;
+
+    // Six of the seven controls a meeting is run from. Leaving is the seventh,
+    // and the client renders it beside the bar rather than in it, so being
+    // enabled is the whole of what makes it reachable.
+    const CORE_BUTTONS = [
+        'microphone',
+        'camera',
+        'desktop',
+        'chat',
+        'participants-pane',
+        'raisehand'
+    ];
+
+    // The buttons of the services this deployment does not run, in the order
+    // the "More" menu would hold them once it did.
+    const SERVICE_BUTTONS = [ 'invite', 'recording', 'highlight', 'livestreaming' ];
+
+    // The configuration keys those services would contribute.
+    const SERVICE_KEYS = [
+        'recordingService',
+        'recordingSharingUrl',
+        'liveStreaming',
+        'dialInNumbersUrl',
+        'dialInConfCodeUrl'
+    ];
+
+    const EVERY_SERVICE = {
+        MEETSPACE_BACKEND: 'meet.example.com',
+        MEETSPACE_DIAL_IN_CONF_CODE_URL: 'https://dial-in.example.com/code',
+        MEETSPACE_DIAL_IN_NUMBERS_URL: 'https://dial-in.example.com/numbers',
+        MEETSPACE_LIVE_STREAMING_HELP_URL: 'https://help.example.com/streaming',
+        MEETSPACE_RECORDING_SHARING_URL: 'https://recordings.example.com/'
+    };
+
+    const servers = [];
+    let root;
+    let shipped;
+    let withEveryService;
+
+    /**
+     * Starts the production server for an environment.
+     *
+     * @param {Object} env - The environment to serve for.
+     * @returns {Promise<string>} The origin the server answers on.
+     */
+    async function serve(env) {
+        const server = http.createServer(createRequestHandler({ env,
+            log: () => { /* quiet */ },
+            root }));
+
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        servers.push(server);
+
+        return `http://127.0.0.1:${server.address().port}`;
+    }
+
+    /**
+     * Reads the configuration a browser is served, and evaluates it the way one
+     * does.
+     *
+     * The source runs in a context with nothing in it: no window, no console,
+     * no Node globals. A configuration that reached for anything the page has
+     * not defined would throw here, rather than in somebody's console.
+     *
+     * @param {string} origin - The server to read the configuration from.
+     * @returns {Promise<Object>} `source`, the JavaScript served, and `config`,
+     * the object it declares.
+     */
+    async function readServedConfig(origin) {
+        const response = await fetch(`${origin}/config.js`);
+
+        assert.strictEqual(response.status, 200, 'the configuration was not served');
+
+        const source = await response.text();
+        const context = vm.createContext({});
+
+        vm.runInContext(source, context);
+
+        // The object comes back through JSON so that it belongs to this realm:
+        // it is plain data either way, and an array built inside the sandbox
+        // does not compare equal to one built outside it.
+        return { config: JSON.parse(JSON.stringify(context.config)),
+            source };
+    }
+
+    before(async () => {
+        root = createFixtureRoot();
+        shipped = await serve({ MEETSPACE_BACKEND: 'meet.example.com' });
+        withEveryService = await serve(EVERY_SERVICE);
+    });
+
+    after(async () => {
+        await Promise.all(servers.map(server => new Promise(resolve => server.close(resolve))));
+        fs.rmSync(root, { recursive: true,
+            force: true });
+    });
+
+    it('serves a configuration the page evaluates without reaching for anything', async () => {
+        const { config } = await readServedConfig(shipped);
+
+        assert.strictEqual(typeof config, 'object');
+        assert.ok(Array.isArray(config.toolbarButtons), 'the served configuration enables no buttons');
+        assert.ok(Array.isArray(config.mainToolbarButtons), 'the served configuration lays out no bar');
+    });
+
+    it('puts every control a meeting is run from one click away, at both widths', async () => {
+        const { config } = await readServedConfig(shipped);
+
+        assert.ok(config.toolbarButtons.includes('hangup'), 'leaving is not enabled');
+
+        for (const width of [ DESKTOP_WIDTH, MOBILE_WIDTH ]) {
+            const reachable = [ ...barAt(config, width), ...overflowAt(config, width) ];
+
+            for (const button of CORE_BUTTONS) {
+                assert.ok(reachable.includes(button), `${button} is unreachable at ${width}px`);
+            }
+        }
+    });
+
+    it('accounts for every button it enables, exactly once, at both widths', async () => {
+        const { config } = await readServedConfig(shipped);
+
+        for (const width of [ DESKTOP_WIDTH, MOBILE_WIDTH ]) {
+            const rendered = [ ...barAt(config, width), ...overflowAt(config, width), 'hangup' ];
+
+            assert.strictEqual(new Set(rendered).size, rendered.length, `a button renders twice at ${width}px`);
+            assert.deepStrictEqual(
+                [ ...rendered ].sort(),
+                [ ...config.toolbarButtons ].sort(),
+                `the bar and the menu do not add up to what is enabled at ${width}px`);
+        }
+    });
+
+    it('keeps a "More" menu at both widths', async () => {
+        const { config } = await readServedConfig(shipped);
+
+        for (const width of [ DESKTOP_WIDTH, MOBILE_WIDTH ]) {
+            // A menu of one is not a menu: the client drops "More" and puts the
+            // single button in the bar instead. Past one, the menu is there.
+            const overflow = overflowAt(config, width);
+
+            assert.ok(overflow.length > 1, `the menu holds ${overflow.length} buttons at ${width}px`);
+        }
+    });
+
+    it('names no service this deployment does not run, anywhere it is served', async () => {
+        const { config, source } = await readServedConfig(shipped);
+
+        for (const button of SERVICE_BUTTONS) {
+            assert.ok(!config.toolbarButtons.includes(button), `${button} is enabled without its service`);
+            assert.ok(!source.includes(`"${button}"`), `${button} is named in the served configuration`);
+
+            for (const width of [ DESKTOP_WIDTH, MOBILE_WIDTH ]) {
+                assert.ok(!barAt(config, width).includes(button), `${button} is in the bar at ${width}px`);
+                assert.ok(!overflowAt(config, width).includes(button), `${button} is in the menu at ${width}px`);
+            }
+        }
+
+        for (const key of SERVICE_KEYS) {
+            assert.ok(!(key in config), `${key} is configured without its service`);
+            assert.ok(!source.includes(key), `${key} is named in the served configuration`);
+        }
+    });
+
+    it('brings a configured service back under "More", never into the bar', async () => {
+        const { config } = await readServedConfig(shipped);
+        const { config: configured } = await readServedConfig(withEveryService);
+
+        for (const width of [ DESKTOP_WIDTH, MOBILE_WIDTH ]) {
+            assert.deepStrictEqual(
+                barAt(configured, width),
+                barAt(config, width),
+                `a configured service changed the bar at ${width}px`);
+            assert.deepStrictEqual(
+                overflowAt(configured, width).filter(
+                    button => !overflowAt(config, width).includes(button)),
+                SERVICE_BUTTONS,
+                `the configured services do not reach the menu at ${width}px`);
+        }
+
+        for (const key of SERVICE_KEYS) {
+            assert.ok(key in configured, `${key} is missing for a configured service`);
+        }
     });
 });
 
