@@ -32,6 +32,27 @@
 # The bundles the served page pulls are all built, so the application that
 # comes up is the whole application. README.md, "What the preview does
 # differently", has the detail.
+#
+# The readiness check is `GET /` on the port from PORT, and a ready application
+# answers it 200. The start stage says when that is true:
+#
+#     [meetspace] STAGE=start STATUS=ready url=http://0.0.0.0:5400
+#
+# That line means served, not merely listening: the server writes it only after
+# asking itself for `/` on loopback and getting a 200 within 5000 ms, so it is
+# the same answer a readiness check gets. It appears at most once per run and
+# never alongside a failure. A start stage stopped before it ever appeared is
+# reported as failed rather than as a clean shutdown, because a readiness
+# timeout and a teardown are otherwise the same log.
+#
+# The two startup failures easiest to confuse are opposites.
+# `REASON=build-output-missing` means the build left nothing to serve and no
+# socket was opened; the missing paths are named with a count.
+# `REASON=readiness-check-failed` means the build output is there and the port
+# is open but the application did not come out over it; the status code or the
+# timeout value is named. The first is the build stage failing late, the second
+# is the server. README.md, "When the preview does not come up", lists all five
+# reasons.
 
 model = "server"
 

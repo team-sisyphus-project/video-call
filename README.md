@@ -149,7 +149,10 @@ classification, and there is never more than one per run:
   `exit=137 signal=SIGKILL`, is the machine running out of memory rather than a
   compile error, and the heap that build asked for is on the `[heap-size]` line
   above it.
-- `start` — `npm start` did not bring the server up.
+- `start` — `npm start` did not bring the server up, or was stopped before it
+  reported itself ready. The runner reads that readiness out of the server's
+  own output, so a preview the platform reaps on a readiness timeout is
+  reported as a failed `start` rather than as a clean shutdown.
 
 Under the marker come the command, the exit status, one line of what that stage
 failing usually means, and the last lines of that stage's own output
@@ -164,13 +167,39 @@ the runner's one verdict per run stays the only `[preview] STAGE=` line:
 [meetspace] STAGE=start STATUS=failed REASON=build-output-missing
 ```
 
-`REASON` is one of `build-output-missing` (the build produced nothing to serve;
-the missing files are listed on the next line), `port-invalid`,
-`port-unavailable` or `internal`, and the two lines following it are the failure
-in the server's own words and what that reason means for the reader. The ready
-line is what tells "the application never started" apart from "it started and
-the readiness probe is looking somewhere else": a probe that times out against a
-process that printed it is the second.
+Under that line come the same failure in the server's own words and one line of
+what the reason means for the reader. `REASON` is one of five tokens:
+
+- `build-output-missing` — the build left nothing to serve, so no socket was
+  opened. The line under it names every missing path with a count
+  (`missing 3 of 9 build outputs: ...`), and counts a zero-byte file or an empty
+  directory as missing, because that is the shape a killed deploy leaves. This
+  is the build stage failing late, not the server.
+- `port-invalid` — `PORT` is not an integer between 1 and 65535. No socket was
+  opened here either.
+- `port-unavailable` — the port could not be bound: taken, not permitted, or
+  not an address on this machine. Nothing is listening, so a readiness check
+  against it can only time out.
+- `readiness-check-failed` — the far side of `build-output-missing`: the build
+  output is there and the port is open, but the application did not come out
+  over it. The line under it is what the check actually got — one of
+  `GET http://127.0.0.1:5400/ answered 500, expected 200`,
+  `... did not answer within 5000ms` and `... failed: connect ECONNREFUSED`.
+  The status code or the timeout value is the part that says where to look: a
+  500 means the cause is further up this log, a timeout means the process
+  itself is stuck, and a refused connection means the port being watched is not
+  the one the application is on.
+- `internal` — the server could not classify the failure. The raw message is
+  all of it.
+
+The ready line means served, not merely listening. Before writing it the server
+asks itself for `/` on the loopback address and requires a 200 within 5000 ms —
+the same request a readiness check makes, so the line is evidence that the
+application answered one. A run prints either `STATUS=ready` or
+`STATUS=failed`, never both. That is what tells "the application never started"
+apart from "it started and the readiness check is looking somewhere else": a
+check that times out against a process that printed the ready line is the
+second, and the port, host or path it is aimed at is what to look at.
 
 ### Configuration
 
