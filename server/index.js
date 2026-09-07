@@ -6,6 +6,20 @@
  * for every other path, because rooms are addressed by path (`/StandUp`).
  *
  * TLS, redirects and compression are the terminator's job, not this server's.
+ *
+ * Startup is the last stage of a preview run, and the stage whose failures are
+ * the hardest to tell apart from the outside: a preview that never answers the
+ * readiness probe looks the same whether the build produced nothing, the port
+ * was taken, or the process is up and the probe is pointed elsewhere. So this
+ * process names its own outcome on one line, in the vocabulary the preview
+ * runner uses for stages:
+ *
+ *     [meetspace] STAGE=start STATUS=ready url=http://0.0.0.0:8080
+ *     [meetspace] STAGE=start STATUS=failed REASON=build-output-missing
+ *
+ * The prefix is this process's own, not the runner's: `scripts/preview.js`
+ * prints exactly one `[preview] STAGE=` line per run and these lines must not
+ * be mistaken for it. They are the evidence the runner quotes, not the verdict.
  */
 
 /* eslint-disable no-console */
@@ -32,6 +46,39 @@ const DEFAULT_PORT = 8080;
 const DEFAULT_HOST = '0.0.0.0';
 
 /**
+ * Prefix every line this process writes about its own startup carries. It is
+ * deliberately not `[preview]`: that prefix belongs to the preview runner's
+ * verdict, of which there is exactly one per run.
+ */
+const LOG_PREFIX = '[meetspace]';
+
+/**
+ * The preview stage this process is. Startup is the whole of what this process
+ * contributes to a preview run, so the value never varies.
+ */
+const STAGE = 'start';
+
+/**
+ * Why startup stopped, and what that means for whoever reads the log. The keys
+ * are the `REASON=` tokens: one token per cause that calls for a different
+ * repair, because a reason that does not change the next action is noise.
+ */
+const STARTUP_REASONS = {
+    'build-output-missing': 'the build did not produce the files named above, so there is nothing to serve; '
+        + 'this is a build stage failure surfacing at startup, not a server fault.',
+    'internal': 'startup failed for a reason this server does not recognise; the line above is all of it.',
+    'port-invalid': 'PORT must be an integer between 1 and 65535; no socket was ever opened.',
+    'port-unavailable': 'the port could not be bound, so nothing is listening and a readiness probe '
+        + 'against it can only time out.'
+};
+
+/**
+ * Socket errors that mean the port itself is the problem: taken by another
+ * process, not permitted, or not an address on this machine.
+ */
+const BIND_ERROR_CODES = [ 'EACCES', 'EADDRINUSE', 'EADDRNOTAVAIL' ];
+
+/**
  * Build outputs the shell cannot render without. Their absence is a broken
  * deployment, not a runtime condition to paper over.
  */
@@ -49,6 +96,97 @@ const REQUIRED_BUILD_OUTPUTS = [
 const ASSET_MAX_AGE = 3600;
 
 /**
+ * Builds an error that already knows why startup cannot continue.
+ *
+ * The reason travels with the error rather than being re-derived from its
+ * message at the point of reporting: message text is for people, and matching
+ * on it is how classification quietly goes wrong.
+ *
+ * @param {string} reason - One of the `STARTUP_REASONS` keys.
+ * @param {string} message - What went wrong, for a person.
+ * @returns {Error} The error to throw.
+ */
+function startupError(reason, message) {
+    const error = new Error(message);
+
+    error.reason = reason;
+
+    return error;
+}
+
+/**
+ * Names the cause of a startup failure.
+ *
+ * @param {Error} error - What startup failed with.
+ * @returns {string} One of the `STARTUP_REASONS` keys.
+ */
+function classifyStartupError(error) {
+    if (error && Object.prototype.hasOwnProperty.call(STARTUP_REASONS, error.reason)) {
+        return error.reason;
+    }
+
+    // Binding is asynchronous, so a taken or forbidden port arrives as a socket
+    // error rather than as one of ours.
+    if (error && BIND_ERROR_CODES.includes(error.code)) {
+        return 'port-unavailable';
+    }
+
+    return 'internal';
+}
+
+/**
+ * Renders the line printed once the server is listening.
+ *
+ * A readiness probe that times out against a process that printed this line is
+ * a probe pointed at the wrong place; against a process that did not, it is a
+ * startup that never happened. That distinction is the whole point of the line.
+ *
+ * @param {number} port - The port being listened on.
+ * @returns {string} The line to log.
+ */
+function formatReady(port) {
+    return `${LOG_PREFIX} STAGE=${STAGE} STATUS=ready url=http://${DEFAULT_HOST}:${port}`;
+}
+
+/**
+ * Renders the report for a startup failure.
+ *
+ * Three lines, always in this order: the classification, the failure in the
+ * server's own words, and what the classification means for the reader.
+ *
+ * @param {Error} error - What startup failed with.
+ * @returns {string[]} The lines to log.
+ */
+function formatStartupFailure(error) {
+    const reason = classifyStartupError(error);
+    const message = (error && error.message) || String(error);
+
+    return [
+        `${LOG_PREFIX} STAGE=${STAGE} STATUS=failed REASON=${reason}`,
+        `${LOG_PREFIX} ${message}`,
+        `${LOG_PREFIX} ${STARTUP_REASONS[reason]}`
+    ];
+}
+
+/**
+ * Reports a startup failure and marks this process as failed.
+ *
+ * The exit code is set rather than the process being killed, so the report is
+ * written out in full before the process leaves.
+ *
+ * @param {Error} error - What startup failed with.
+ * @param {Function} [logError] - Where the report goes.
+ * @returns {void}
+ */
+function failStartup(error, logError = console.error) {
+    for (const line of formatStartupFailure(error)) {
+        logError(line);
+    }
+
+    process.exitCode = 1;
+}
+
+/**
  * Reads the port from the environment.
  *
  * @param {Object} env - The environment to read from.
@@ -64,7 +202,7 @@ function readPort(env) {
     const port = Number(raw);
 
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-        throw new Error(`PORT is not a valid port number: ${JSON.stringify(raw)}`);
+        throw startupError('port-invalid', `PORT is not a valid port number: ${JSON.stringify(raw)}`);
     }
 
     return port;
@@ -242,18 +380,25 @@ function createRequestHandler({ env = process.env, log = console.log, root = REP
 /**
  * Starts the server.
  *
+ * Everything that can be known before a socket is opened is checked first and
+ * thrown; binding fails later and asynchronously, so that failure is handed to
+ * `onError` instead. Both paths carry a reason.
+ *
  * @param {Object} [options] - The options.
  * @param {string} [options.root] - The repository root to serve from.
  * @param {Object} [options.env] - The environment to read configuration from.
  * @param {Function} [options.log] - Where diagnostics go.
+ * @param {Function} [options.onError] - Called with a failure that only shows
+ * up once the server tries to bind.
  * @returns {Object} The listening `http.Server`.
  */
-function start({ env = process.env, log = console.log, root = REPO_ROOT } = {}) {
+function start({ env = process.env, log = console.log, onError = failStartup, root = REPO_ROOT } = {}) {
     const documentRoot = path.resolve(root);
     const missing = missingBuildOutputs(documentRoot);
 
     if (missing.length) {
-        throw new Error(
+        throw startupError(
+            'build-output-missing',
             `The application is not built, missing: ${missing.join(', ')}. `
             + 'Run "npm run build" first.');
     }
@@ -263,13 +408,20 @@ function start({ env = process.env, log = console.log, root = REPO_ROOT } = {}) 
         log,
         root: documentRoot }));
 
+    server.on('error', error => {
+        // A server that never bound holds nothing open; closing it is what makes
+        // the process able to leave with the exit code the report just set.
+        server.close(() => { /* already closed by the failed bind */ });
+        onError(error);
+    });
+
     server.listen(port, DEFAULT_HOST, () => {
-        log(`meetspace listening on http://${DEFAULT_HOST}:${port}`);
+        log(formatReady(port));
     });
 
     for (const signal of [ 'SIGINT', 'SIGTERM' ]) {
         process.once(signal, () => {
-            log(`${signal} received, shutting down`);
+            log(`${LOG_PREFIX} ${signal} received, shutting down`);
             server.close(() => process.exit(0));
         });
     }
@@ -281,14 +433,18 @@ if (require.main === module) {
     try {
         start();
     } catch (error) {
-        console.error(`[meetspace] ${error.message}`);
-        process.exit(1);
+        failStartup(error);
     }
 }
 
 module.exports = {
     DEFAULT_PORT,
+    STARTUP_REASONS,
+    classifyStartupError,
     createRequestHandler,
+    failStartup,
+    formatReady,
+    formatStartupFailure,
     missingBuildOutputs,
     readPort,
     start

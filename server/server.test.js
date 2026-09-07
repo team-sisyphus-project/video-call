@@ -5,6 +5,7 @@
  */
 
 const assert = require('assert');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const { after, before, describe, it } = require('node:test');
@@ -15,7 +16,15 @@ const { buildConfigJs, buildInterfaceConfigJs, readBackend } = require('./runtim
 const { renderShell } = require('./shell');
 const { contentTypeFor, resolveAsset } = require('./static');
 
-const { createRequestHandler, missingBuildOutputs, readPort } = require('./index');
+const {
+    STARTUP_REASONS,
+    classifyStartupError,
+    createRequestHandler,
+    formatReady,
+    formatStartupFailure,
+    missingBuildOutputs,
+    readPort
+} = require('./index');
 
 /**
  * Writes a file and the directories leading to it.
@@ -55,6 +64,99 @@ function createFixtureRoot() {
     write(path.join(root, 'secret.txt'), 'do not serve me');
 
     return root;
+}
+
+/**
+ * Creates a document root the server can actually be spawned against: the
+ * fixture of `createFixtureRoot`, with this server's own sources copied in so
+ * that the repository root the process resolves is the fixture.
+ *
+ * @returns {string} The absolute path of the document root.
+ */
+function createRunnableRoot() {
+    const root = createFixtureRoot();
+
+    fs.cpSync(__dirname, path.join(root, 'server'), {
+        filter: source => !source.endsWith('.test.js'),
+        recursive: true
+    });
+
+    return root;
+}
+
+/**
+ * Finds a port nothing is listening on.
+ *
+ * @returns {Promise<number>} The port.
+ */
+function freePort() {
+    return new Promise(resolve => {
+        const probe = http.createServer();
+
+        probe.listen(0, '127.0.0.1', () => {
+            const { port } = probe.address();
+
+            probe.close(() => resolve(port));
+        });
+    });
+}
+
+/**
+ * Runs the server as the preview platform runs it — as its own process — and
+ * collects what it said and how it left.
+ *
+ * @param {Object} options - The options.
+ * @param {string} options.root - The document root to spawn against.
+ * @param {Object} [options.env] - Environment overrides for the process.
+ * @param {RegExp} [options.until] - When given, the run is stopped as soon as
+ * the output matches, instead of being waited out.
+ * @returns {Promise<Object>} The exit code, signal and combined output.
+ */
+function runServer({ env = {}, root, until = null }) {
+    return new Promise(resolve => {
+        const child = spawn(process.execPath, [ path.join(root, 'server', 'index.js') ], {
+            env: { ...process.env,
+                ...env },
+            stdio: [ 'ignore', 'pipe', 'pipe' ]
+        });
+        let output = '';
+        let stopped = false;
+
+        /**
+         * Keeps a chunk of the run's output, and ends the run once the caller
+         * has seen what it was waiting for.
+         *
+         * @param {string} chunk - What the run wrote.
+         * @returns {void}
+         */
+        const record = chunk => {
+            output += chunk;
+
+            if (until && !stopped && until.test(output)) {
+                stopped = true;
+                child.kill('SIGTERM');
+            }
+        };
+
+        for (const stream of [ child.stdout, child.stderr ]) {
+            stream.setEncoding('utf8');
+            stream.on('data', record);
+        }
+
+        child.on('close', (code, signal) => resolve({ code,
+            output,
+            signal }));
+    });
+}
+
+/**
+ * The classification lines of a run, in order.
+ *
+ * @param {string} output - What the run wrote.
+ * @returns {string[]} The lines carrying a `STAGE=` marker.
+ */
+function stageLines(output) {
+    return output.split('\n').filter(line => line.includes('STAGE='));
 }
 
 describe('readPort', () => {
@@ -335,5 +437,122 @@ describe('the served application', () => {
 
         assert.strictEqual(response.status, 405);
         assert.strictEqual(response.headers.get('allow'), 'GET, HEAD');
+    });
+});
+
+describe('classifyStartupError', () => {
+    it('reads the reason the failure carries', () => {
+        for (const reason of Object.keys(STARTUP_REASONS)) {
+            assert.strictEqual(classifyStartupError(Object.assign(new Error('x'), { reason })), reason);
+        }
+    });
+
+    it('classifies a bind failure by its socket error code', () => {
+        for (const code of [ 'EADDRINUSE', 'EACCES', 'EADDRNOTAVAIL' ]) {
+            assert.strictEqual(
+                classifyStartupError(Object.assign(new Error('listen'), { code })),
+                'port-unavailable');
+        }
+    });
+
+    it('does not invent a reason for a failure it does not know', () => {
+        assert.strictEqual(classifyStartupError(new Error('boom')), 'internal');
+        assert.strictEqual(
+            classifyStartupError(Object.assign(new Error('boom'), { reason: 'made-up' })),
+            'internal');
+    });
+});
+
+describe('formatStartupFailure', () => {
+    it('names the stage, the reason and the failure itself', () => {
+        const lines = formatStartupFailure(
+            Object.assign(new Error('PORT is not a valid port number: "nope"'),
+                { reason: 'port-invalid' }));
+
+        assert.strictEqual(lines[0], '[meetspace] STAGE=start STATUS=failed REASON=port-invalid');
+        assert.ok(lines[1].includes('PORT is not a valid port number'));
+        assert.strictEqual(lines.length, 3);
+    });
+
+    it('gives every reason a marker of its own', () => {
+        const markers = Object.keys(STARTUP_REASONS).map(
+            reason => formatStartupFailure(Object.assign(new Error('x'), { reason }))[0]);
+
+        assert.strictEqual(new Set(markers).size, Object.keys(STARTUP_REASONS).length);
+    });
+
+    it('does not print what the preview runner claims as its own verdict', () => {
+        const lines = [
+            ...formatStartupFailure(Object.assign(new Error('x'), { reason: 'internal' })),
+            formatReady(8080)
+        ];
+
+        assert.ok(lines.every(line => !line.includes('[preview] STAGE=')), lines.join('\n'));
+    });
+});
+
+describe('the server as its own process', () => {
+    let root;
+
+    before(() => {
+        root = createRunnableRoot();
+    });
+    after(() => fs.rmSync(root, { recursive: true,
+        force: true }));
+
+    it('says it is ready, once, with the port it is listening on', async () => {
+        const port = await freePort();
+        const { output } = await runServer({ env: { PORT: String(port) },
+            root,
+            until: /STATUS=ready/ });
+
+        assert.deepStrictEqual(
+            stageLines(output),
+            [ `[meetspace] STAGE=start STATUS=ready url=http://0.0.0.0:${port}` ]);
+    });
+
+    it('classifies a missing build output and exits non-zero', async () => {
+        const missingRoot = createRunnableRoot();
+
+        fs.rmSync(path.join(missingRoot, 'libs/app.bundle.min.js'));
+
+        const { code, output } = await runServer({ root: missingRoot });
+
+        fs.rmSync(missingRoot, { recursive: true,
+            force: true });
+
+        assert.notStrictEqual(code, 0);
+        assert.deepStrictEqual(
+            stageLines(output),
+            [ '[meetspace] STAGE=start STATUS=failed REASON=build-output-missing' ]);
+        assert.ok(output.includes('libs/app.bundle.min.js'), output);
+    });
+
+    it('classifies an unusable PORT and exits non-zero', async () => {
+        const { code, output } = await runServer({ env: { PORT: 'eighty-eighty' },
+            root });
+
+        assert.notStrictEqual(code, 0);
+        assert.deepStrictEqual(
+            stageLines(output),
+            [ '[meetspace] STAGE=start STATUS=failed REASON=port-invalid' ]);
+        assert.ok(output.includes('eighty-eighty'), output);
+    });
+
+    it('classifies a port it cannot bind and exits non-zero', async () => {
+        const occupant = http.createServer();
+
+        await new Promise(resolve => occupant.listen(0, '0.0.0.0', resolve));
+
+        const { port } = occupant.address();
+        const { code, output } = await runServer({ env: { PORT: String(port) },
+            root });
+
+        await new Promise(resolve => occupant.close(resolve));
+
+        assert.notStrictEqual(code, 0);
+        assert.deepStrictEqual(
+            stageLines(output),
+            [ '[meetspace] STAGE=start STATUS=failed REASON=port-unavailable' ]);
     });
 });
