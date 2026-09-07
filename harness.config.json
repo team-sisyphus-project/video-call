@@ -1,0 +1,36 @@
+{
+  "name": "meetspace",
+  "app": {
+    "smokeCommand": "node demo/start.js",
+    "portBase": 5400,
+    "portArg": "--port",
+    "strictPortArg": "--strictPort",
+    "hashRouting": false,
+    "demoMode": true
+  },
+  "validation": {
+    "steps": [
+      {
+        "id": "lint",
+        "kind": "lint",
+        "command": "npx eslint --ext .js,.ts,.tsx --max-warnings 0",
+        "changedScoped": true,
+        "extensions": [
+          ".js",
+          ".ts",
+          ".tsx"
+        ]
+      },
+      {
+        "id": "typecheck",
+        "kind": "typecheck",
+        "command": "npm run tsc:web"
+      }
+    ]
+  },
+  "notes": {
+    "hashRouting": "jitsi-meet routes rooms by path (/RoomName). The demo dev server answers any non-asset path with the app shell, so path routing survives a root-mounted proxy. It does not survive being mounted under a sub-path.",
+    "startup": "node demo/start.js binds the assigned port immediately and serves a build-progress page, then proxies to the webpack dev server once it answers. The first compile takes minutes; the port never stops responding. Invoked directly rather than through npm start, because npm swallows unknown flags and would drop --port.",
+    "externalDependencies": "None to start or browse. Signalling is proxied to WEBPACK_DEV_SERVER_PROXY_TARGET only when a room is actually joined."
+  }
+}
