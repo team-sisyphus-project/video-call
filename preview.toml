@@ -13,9 +13,25 @@
 #
 # followed by the exit status and the tail of that stage's own output. Grep the
 # preview log for `[preview] STAGE=` to find out which stage stopped the run;
-# there is exactly one such line per failed run. The underlying commands are
-# unchanged (`npm install`, `npm run build`, `npm start`) and their output is
-# streamed through as it happens.
+# there is exactly one such line per failed run. The stages run `npm install`,
+# `npm run build:preview` and `npm start`, and their output is streamed through
+# as it happens.
+#
+# The two stages before `npm start` do less than a release build, because this
+# runner is given fewer minutes and less memory than one:
+#
+#   - install runs with MEETSPACE_SKIP_MOBILE=1, so postinstall applies the
+#     patches/ overrides and skips the three React Native steps (jetify,
+#     android-clean-cmake-cache, android-autolinking). A web preview never
+#     builds the mobile side.
+#   - build runs `npm run build:preview` (`make preview`), not `npm run build`.
+#     That sets MEETSPACE_PREVIEW=1, which drops source maps and the three
+#     bundles a preview never opens — alwaysontop, documentpip, close3 — and it
+#     sizes the V8 heap to this machine instead of asking for a fixed 8 GB.
+#
+# The bundles the served page pulls are all built, so the application that
+# comes up is the whole application. README.md, "What the preview does
+# differently", has the detail.
 
 model = "server"
 

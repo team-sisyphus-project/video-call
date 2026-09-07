@@ -34,8 +34,9 @@ curl -sI http://127.0.0.1:5400/          # 200, content-type: text/html
 curl -sI http://127.0.0.1:5400/StandUp   # 200, the same shell: rooms are paths
 ```
 
-That is the whole green-field path, and it is what a deployment and the preview
-run. There is no fourth step:
+That is the whole green-field path and what a deployment runs. The preview runs
+the same three steps with less work in two of them, described below. There is no
+fourth step:
 
 - **No database and no cache.** Nothing to migrate, nothing to seed. The
   platform's `DATABASE_URL` and `REDIS_URL` are ignored if they are injected —
@@ -48,8 +49,10 @@ run. There is no fourth step:
 `npm install` also runs `postinstall`, which applies the `patches/` overrides and
 prepares the React Native side (`jetifier`, autolinking metadata). Those steps
 are pure Node and succeed without an Android or iOS toolchain installed, so a
-web-only checkout is unaffected — it only pays the minutes. The install pulls the
-React Native toolchain too, so it lands around 1.3 GB in `node_modules`.
+web-only checkout is unaffected — it only pays the minutes. The preview does not
+pay them: it sets `MEETSPACE_SKIP_MOBILE=1` and those steps are skipped. The
+install pulls the React Native toolchain either way, so it lands around 1.3 GB
+in `node_modules`.
 
 `.npmrc` asks npm for dev dependencies explicitly: the build toolchain (webpack,
 sass, patch-package) lives in `devDependencies`, and a host that exports
@@ -69,14 +72,65 @@ Without a reachable backend the welcome page, the prejoin screen with camera
 preview and the settings surfaces still load; joining a meeting needs the
 backend.
 
+### What the preview does differently
+
+The preview runs the same three steps on a machine with a fraction of the
+memory and the minutes a release build assumes. Two of the steps are lighter
+for it. Nothing the served page pulls is left out, so what comes up is the
+application and not a reduced one.
+
+`install` runs with `MEETSPACE_SKIP_MOBILE=1`. `postinstall` then applies the
+`patches/` overrides and stops, skipping `jetify`, `android-clean-cmake-cache`
+and `android-autolinking` — the three steps that exist for the React Native
+side, which a web preview never builds. `patch-package` is never skipped,
+because the bundles are compiled from the patched sources. The install says
+what it did and did not do:
+
+```
+[preview] stage install: mobile install steps opted out (MEETSPACE_SKIP_MOBILE=1)
+[postinstall] STAGE=install STATUS=ok ran=patch-package skipped=jetify,android-clean-cmake-cache,android-autolinking
+```
+
+`build` runs `npm run build:preview` (`make preview`) instead of `npm run build`
+(`make all`). That sets `MEETSPACE_PREVIEW=1` for webpack and sizes the V8
+old-space heap to the machine — 75% of total memory, capped at 8192 MB and
+floored at 2048 MB — rather than asking for the fixed 8 GB `make all` asks for
+on every machine. The number and the reason for it are both in the log:
+
+```
+[preview] stage build: preview build profile, heap sized to this machine (make preview)
+[heap-size] stage build: heap 6144 MB of 8192 MB total (75% share, cap 8192, floor 2048)
+[webpack] stage build: preview profile, 6 of 9 bundles, no source maps (dropped: alwaysontop, documentpip, close3)
+```
+
+Under `MEETSPACE_PREVIEW=1` three bundles are absent from `build/` and from the
+deployed `libs/`, and so are all source maps:
+
+- `alwaysontop.min.js` — the always-on-top window
+- `documentpip.min.js` — its document picture-in-picture variant
+- `close3.min.js` — the third-party close page
+
+All three are reachable only from surfaces a preview never opens. The six that
+are built are the ones the page pulls: `app.bundle.min.js`,
+`external_api.min.js` and the four workers (`face-landmarks-worker`,
+`noise-suppressor-worklet`, `screenshot-capture-worker`,
+`vb-inference-worker`). The list lives in `PREVIEW_ENTRIES` in
+`webpack.config.js`, and a name in it that no longer matches an entry fails the
+build instead of quietly shrinking it.
+
+`npm run build` is untouched: it still builds all nine bundles with source maps
+and asks for the same heap it always did. Run that one, not `build:preview`,
+when a missing bundle or a stack trace against a source map is what you are
+working on.
+
 ### When the preview does not come up
 
 The preview runs those same three steps as named stages — `install`, `build`,
 `start` — through `scripts/preview.js`, which is what `preview.toml` and
 `harness.config.json` point at: `npm run preview:build` is install plus build,
-`npm run preview:start` is start. The commands underneath are unchanged and
-their output is streamed through untouched. What the runner adds is a name for
-the stage that stopped.
+`npm run preview:start` is start. The commands underneath are the ones above,
+with the preview's own switches, and their output is streamed through
+untouched. What the runner adds is a name for the stage that stopped.
 
 A failed run prints exactly one line of this shape:
 
@@ -87,11 +141,14 @@ A failed run prints exactly one line of this shape:
 Grep the log for `[preview] STAGE=` and read the stage token. That token is the
 classification, and there is never more than one per run:
 
-- `install` — `npm install` failed. It also runs `postinstall` (patch-package,
-  jetify, Android autolinking), so a failure there stops the install.
-- `build` — `npm run build` failed. That is webpack plus the asset deploy; a
-  kill by signal, printed as `exit=137 signal=SIGKILL`, is the machine running
-  out of memory rather than a compile error.
+- `install` — `npm install` failed. It also runs `postinstall`, which under the
+  preview is `patch-package` alone, so a failure there stops the install. The
+  `[postinstall]` line names the step that failed.
+- `build` — `npm run build:preview` failed. That is webpack under the preview
+  profile plus the asset deploy; a kill by signal, printed as
+  `exit=137 signal=SIGKILL`, is the machine running out of memory rather than a
+  compile error, and the heap that build asked for is on the `[heap-size]` line
+  above it.
 - `start` — `npm start` did not bring the server up.
 
 Under the marker come the command, the exit status, one line of what that stage
@@ -160,9 +217,10 @@ device selection, virtual backgrounds and settings all work with no backend at
 all. Point it at a Jitsi deployment and real meetings work too.
 
 Demo mode is a development convenience, started by hand. It is not the path a
-deployment or the preview takes — that is `npm run build` then `npm start`, as
-declared in `preview.toml`. See [DEMO.md](DEMO.md) for the details and for how to
-attach a backend.
+deployment or the preview takes — that is `npm run build` (`npm run
+build:preview` for the preview) then `npm start`, as declared in
+`preview.toml`. See [DEMO.md](DEMO.md) for the details and for how to attach a
+backend.
 
 ### Upstream dev mode
 
