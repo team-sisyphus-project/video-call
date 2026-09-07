@@ -94,6 +94,47 @@ Pointing the production server at your own deployment:
 PORT=5400 MEETSPACE_BACKEND=meet.example.com npm start
 ```
 
+### The toolbar
+
+A meeting is run from seven controls: microphone, camera, screen share, chat,
+participants, raise hand and leave. Everything else the client can offer — tile
+view, full screen, virtual backgrounds, video quality, security, captions, noise
+suppression, shared video and audio, whiteboard, stats, settings, shortcuts,
+profile and help — is one click away under "More". Nothing is lost by being
+moved there; only by being taken out of the configuration entirely, which is a
+separate decision, below.
+
+The width of the bar is the client's to decide, not ours. It holds a table of
+window widths with a fixed number of slots each (eight down to two on the web)
+and always fills them, so a shorter list does not give a shorter bar, only one
+with buttons nobody chose. The two widest layouts therefore spend their spare
+slots on tile view and full screen rather than leave the choice open. Every
+layout leads with the same controls in the same order, so what a narrow window
+drops is always a secondary one. Leave is rendered beside the bar and never
+takes a slot.
+
+Two generated values decide all of this, both of them in the `config.js` this
+server writes:
+
+| Value | What it decides |
+| --- | --- |
+| `toolbarButtons` | Which buttons exist at all. One that is missing here is in neither the bar nor "More". |
+| `mainToolbarButtons` | Which of them the bar shows, per window width, and in what order. Whatever is left out is under "More". |
+
+Five buttons are left out of `toolbarButtons` altogether, because this
+deployment has no backend behind them: `recording`, `livestreaming` and
+`highlight` (no recorder), `invite` (no dial-in or invitation service) and
+`linktosalesforce` (no CRM). Under "More" they would be buttons that cannot
+work.
+
+To re-enable one, add its key back to `TOOLBAR_BUTTONS` in
+`server/runtime-config.js`, and to the matching list in `demo/config.js` so that
+demo mode keeps showing the same product — a test compares the two copies and
+fails when they drift. That much puts the button under "More". To give it a
+place in the bar instead, put the key into the rows of `MAIN_TOOLBAR_BUTTONS` as
+well, in place of another: a row's length is the width it addresses, so a row
+that grows addresses a different width rather than a wider bar.
+
 ### Demo mode
 
 The webpack dev server with a build-progress page, for working on the client:
