@@ -234,6 +234,7 @@
     "test:postinstall": "node --test scripts/postinstall.test.js",
     "test:preview": "node --test scripts/preview.test.js",
     "test:server": "node --test server/server.test.js",
+    "test:webpack": "node --test webpack.config.test.js",
     "test-single": "DOTENV_CONFIG_PATH=tests/.env wdio run tests/wdio.conf.ts --spec",
     "test-ff-single": "DOTENV_CONFIG_PATH=tests/.env wdio run tests/wdio.firefox.conf.ts --spec",
     "test-ff": "DOTENV_CONFIG_PATH=tests/.env wdio run tests/wdio.firefox.conf.ts",

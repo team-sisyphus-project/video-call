@@ -24,6 +24,115 @@ const devServerProxyTarget
 const isDemoMode = Boolean(process.env.MEETSPACE_DEMO);
 
 /**
+ * The name of the variable that turns the preview profile on, and the values
+ * that count as on. A value the reader plainly meant as "off" must not read as
+ * "on", so the check is against a list rather than truthiness — `=0` is how a
+ * preview gets turned back into a full build.
+ */
+const PREVIEW = {
+    name: 'MEETSPACE_PREVIEW',
+    onValues: [ '1', 'true', 'yes' ]
+};
+
+/**
+ * The bundles the preview profile builds.
+ *
+ * A preview exists to have the application come up and be clicked through on a
+ * machine with a fraction of the memory and the minutes a release build
+ * assumes. These are the entries the served page actually pulls: the app, the
+ * external API the embedding page loads, and the four workers the app spawns.
+ * What is left out — the always-on-top window, its document
+ * picture-in-picture variant, and the third-party close page — is reachable
+ * only from surfaces a preview never opens.
+ */
+const PREVIEW_ENTRIES = [
+    'app.bundle',
+    'external_api',
+    'face-landmarks-worker',
+    'noise-suppressor-worklet',
+    'screenshot-capture-worker',
+    'vb-inference-worker'
+];
+
+/**
+ * Whether this is a preview build.
+ *
+ * Read per invocation rather than once at load, so the profile is a property
+ * of how webpack was run and not of when this file happened to be required.
+ *
+ * @param {Object} [env] - The environment to read from.
+ * @returns {boolean} True when the preview profile is on.
+ */
+function isPreviewBuild(env = process.env) {
+    const raw = env[PREVIEW.name];
+
+    return typeof raw === 'string' && PREVIEW.onValues.includes(raw.trim().toLowerCase());
+}
+
+/**
+ * The single entry name of a bundle configuration.
+ *
+ * @param {Object} config - A bundle configuration.
+ * @returns {string} The entry name.
+ */
+function entryNameOf(config) {
+    return Object.keys(config.entry)[0];
+}
+
+/**
+ * Reduces the bundle list to the preview profile.
+ *
+ * Two things go besides the three dropped bundles. Source maps are the largest
+ * thing a production build of this size holds in memory and nothing reads them
+ * on a preview host, so `devtool` is off. And the asset size budget is a
+ * release gate — failing a preview build over a bundle being 20KB too large
+ * would report "compilation failed" for something a preview does not care
+ * about — so performance hints are off too.
+ *
+ * @param {Array} configs - Every bundle configuration, in build order.
+ * @returns {Array} The preview subset, without source maps or size budgets.
+ */
+function forPreview(configs) {
+    const kept = configs.filter(config => PREVIEW_ENTRIES.includes(entryNameOf(config)));
+    const missing = PREVIEW_ENTRIES.filter(name => !kept.some(config => entryNameOf(config) === name));
+
+    // An entry renamed out from under this list would leave the preview server
+    // starting against a build that silently lacks it. Say so here instead.
+    if (missing.length) {
+        throw new Error(
+            `${PREVIEW.name} is set but the preview profile names entries this build does not have: `
+                + `${missing.join(', ')}. Update PREVIEW_ENTRIES in webpack.config.js.`);
+    }
+
+    return kept.map(config => {
+        return { ...config,
+            devtool: false,
+            performance: false };
+    });
+}
+
+/**
+ * Reports that this build is doing less than a full one.
+ *
+ * A preview that quietly skips work is a trap for whoever reads the log next,
+ * and webpack is the only process here that knows which entries went. Written
+ * as the stage note of the preview stage report, under this process's own
+ * prefix so the runner's own one-marker-per-run line stays unique.
+ *
+ * @param {Array} kept - The bundle configurations that will be built.
+ * @param {Array} all - The bundle configurations a full build would build.
+ * @param {Function} [log] - Where to write the line.
+ * @returns {void}
+ */
+function reportPreviewProfile(kept, all, log = console.log) { // eslint-disable-line no-console
+    const keptNames = kept.map(entryNameOf);
+    const dropped = all.map(entryNameOf).filter(name => !keptNames.includes(name));
+
+    log(`[webpack] stage build: preview profile, ${kept.length} of ${all.length} bundles, `
+        + `no source maps (dropped: ${dropped.join(', ')})`);
+}
+
+/**
  * Build a Performance configuration object for the given size.
  * See: https://webpack.js.org/configuration/performance/
  *
@@ -402,7 +511,7 @@ module.exports = (_env, argv) => {
         isProduction
     };
 
-    return [
+    const bundles = [
         { ...config,
             entry: {
                 'app.bundle': './app.js'
@@ -529,4 +638,14 @@ module.exports = (_env, argv) => {
             ],
             performance: getPerformanceHints(perfHintOptions, 30 * 1024) }
     ];
+
+    if (!isPreviewBuild()) {
+        return bundles;
+    }
+
+    const preview = forPreview(bundles);
+
+    reportPreviewProfile(preview, bundles);
+
+    return preview;
 };
