@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "meetspace-demo",
+      "runtimeExecutable": "make",
+      "runtimeArgs": ["demo"],
+      "port": 8080
+    }
+  ]
+}

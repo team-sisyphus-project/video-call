@@ -1,0 +1,246 @@
+import React, { useCallback, useRef, useState } from 'react';
+import ReactDOM from 'react-dom';
+import { useTranslation } from 'react-i18next';
+import { useDispatch, useSelector } from 'react-redux';
+import { makeStyles } from 'tss-react/mui';
+
+import { IReduxState } from '../../../app/types';
+import { IconDotsHorizontal } from '../../../base/icons/svg';
+import { getParticipantById, isLocalParticipantModerator } from '../../../base/participants/functions';
+import Popover from '../../../base/popover/components/Popover.web';
+import Button from '../../../base/ui/components/web/Button';
+import { BUTTON_TYPES } from '../../../base/ui/constants.any';
+import { copyText } from '../../../base/util/copyText.web';
+import { sendMessageModeration, sendMessageRetraction } from '../../actions.any';
+import { handleLobbyChatInitialized, openChat } from '../../actions.web';
+import { MESSAGE_TYPE_LOCAL } from '../../constants';
+import logger from '../../logger';
+import { IMessage } from '../../types';
+
+export interface IProps {
+    canEdit?: boolean;
+    className?: string;
+    displayName?: string;
+    enablePrivateChat: boolean;
+    isFileMessage?: boolean;
+    isFromVisitor?: boolean;
+    isLobbyMessage: boolean;
+    isModerated?: boolean;
+    message: IMessage;
+    onEditMessage?: () => void;
+    participantId: string;
+}
+
+const useStyles = makeStyles()(theme => {
+    return {
+        messageMenuButton: {
+            padding: '2px'
+        },
+        menuItem: {
+            padding: '8px 16px',
+            cursor: 'pointer',
+            color: 'white',
+            '&:hover': {
+                backgroundColor: theme.palette.action03
+            }
+        },
+        menuPanel: {
+            backgroundColor: theme.palette.chatInputBackground,
+            borderRadius: theme.shape.borderRadius,
+            boxShadow: theme.shadows[3],
+            overflow: 'hidden'
+        },
+        copiedMessage: {
+            position: 'fixed',
+            backgroundColor: theme.palette.chatInputBackground,
+            color: 'white',
+            padding: '4px 8px',
+            borderRadius: '4px',
+            fontSize: '0.75rem',
+            zIndex: 1000,
+            opacity: 0,
+            transition: 'opacity 0.3s ease-in-out',
+            pointerEvents: 'none'
+        },
+        showCopiedMessage: {
+            opacity: 1
+        }
+    };
+});
+
+const MessageMenu = ({ canEdit, message, isFromVisitor, isLobbyMessage, isModerated, enablePrivateChat, displayName, isFileMessage, onEditMessage }: IProps) => {
+    const dispatch = useDispatch();
+    const { classes, cx } = useStyles();
+    const { t } = useTranslation();
+    const [ isPopoverOpen, setIsPopoverOpen ] = useState(false);
+    const [ showCopiedMessage, setShowCopiedMessage ] = useState(false);
+    const [ popupPosition, setPopupPosition ] = useState({ top: 0,
+        left: 0 });
+    const buttonRef = useRef<HTMLDivElement>(null);
+
+    const isModerator = useSelector(isLocalParticipantModerator);
+    const messageModerationSupported = useSelector(
+        (state: IReduxState) => state['features/chat'].messageModerationSupported);
+    const participant = useSelector((state: IReduxState) => getParticipantById(state, message.participantId));
+
+    // Editing and deleting are applied by the server, so only offer them where the
+    // room says it handles them.
+    const canEditMessage = canEdit && messageModerationSupported;
+
+    // If no menu items will be shown, don't render the menu button.
+    if (!enablePrivateChat && isFileMessage && !canEditMessage) {
+        return null;
+    }
+
+    const handleMenuClick = useCallback(() => {
+        setIsPopoverOpen(true);
+    }, []);
+
+    const handleClose = useCallback(() => {
+        setIsPopoverOpen(false);
+    }, []);
+
+    const handlePrivateClick = useCallback(() => {
+        if (isLobbyMessage) {
+            dispatch(handleLobbyChatInitialized(message.participantId));
+        } else {
+            // For visitor messages, participant will be undefined but we can still open chat
+            // using the participantId which contains the visitor's original JID
+            if (isFromVisitor) {
+                // Handle visitor participant that doesn't exist in main participant list
+                const visitorParticipant = {
+                    id: message.participantId,
+                    name: displayName,
+                    isVisitor: true
+                };
+
+                dispatch(openChat(visitorParticipant));
+            } else {
+                dispatch(openChat(participant));
+            }
+        }
+        handleClose();
+    }, [ dispatch, isLobbyMessage, participant, message.participantId, displayName ]);
+
+    const handleCopyClick = useCallback(() => {
+        copyText(message.message)
+            .then(success => {
+                if (success) {
+                    if (buttonRef.current) {
+                        const rect = buttonRef.current.getBoundingClientRect();
+
+                        setPopupPosition({
+                            top: rect.top - 30,
+                            left: rect.left
+                        });
+                    }
+                    setShowCopiedMessage(true);
+                    setTimeout(() => {
+                        setShowCopiedMessage(false);
+                    }, 2000);
+                } else {
+                    logger.error('Failed to copy text');
+                }
+            })
+            .catch((error: Error) => {
+                logger.error('Error copying text', error);
+            });
+        handleClose();
+    }, [ message.message ]);
+
+    const handleDeleteClick = useCallback(() => {
+        dispatch(sendMessageRetraction(message));
+
+        handleClose();
+    }, [ message, handleClose ]);
+
+    const handleModerateClick = useCallback(() => {
+        dispatch(sendMessageModeration(message));
+        handleClose();
+    }, [ dispatch, message, handleClose ]);
+
+    const handleEditClick = useCallback(() => {
+        onEditMessage?.();
+        handleClose();
+    }, [ onEditMessage, handleClose ]);
+
+    const popoverContent = (
+        <div className = { classes.menuPanel }>
+            {canEditMessage && (
+                <div
+                    className = { classes.menuItem }
+                    onClick = { handleEditClick }>
+                    {t('Edit')}
+                </div>
+            )}
+            {enablePrivateChat && (
+                <div
+                    className = { classes.menuItem }
+                    onClick = { handlePrivateClick }>
+                    {t('Private Message')}
+                </div>
+            )}
+            {!isFileMessage && (
+                <div
+                    className = { classes.menuItem }
+                    onClick = { handleCopyClick }>
+                    {t('Copy')}
+                </div>
+            )}
+            {isModerator
+                && !isModerated
+                && messageModerationSupported
+                && message.messageType !== MESSAGE_TYPE_LOCAL
+                && (
+                    <div
+                        className = { classes.menuItem }
+                        onClick = { handleModerateClick }>
+                        {t('chat.delete')}
+                    </div>
+                )}
+            {message.messageType === MESSAGE_TYPE_LOCAL
+                && !message.isDeleted
+                && !message.isModerated
+                && messageModerationSupported
+                && (
+                    <div
+                        className = { classes.menuItem }
+                        onClick = { handleDeleteClick }>
+                        {t('chat.deleteMessage')}
+                    </div>
+                )}
+        </div>
+    );
+
+    return (
+        <div>
+            <div ref = { buttonRef }>
+                <Popover
+                    content = { popoverContent }
+                    onPopoverClose = { handleClose }
+                    position = 'top'
+                    trigger = 'click'
+                    visible = { isPopoverOpen }>
+                    <Button
+                        accessibilityLabel = { t('toolbar.accessibilityLabel.moreOptions') }
+                        className = { classes.messageMenuButton }
+                        icon = { IconDotsHorizontal }
+                        onClick = { handleMenuClick }
+                        type = { BUTTON_TYPES.TERTIARY } />
+                </Popover>
+            </div>
+
+            {showCopiedMessage && ReactDOM.createPortal(
+                <div
+                    className = { cx(classes.copiedMessage, { [classes.showCopiedMessage]: showCopiedMessage }) }
+                    style = {{ top: `${popupPosition.top}px`,
+                        left: `${popupPosition.left}px` }}>
+                    {t('Message Copied')}
+                </div>,
+                document.body
+            )}
+        </div>
+    );
+};
+
+export default MessageMenu;

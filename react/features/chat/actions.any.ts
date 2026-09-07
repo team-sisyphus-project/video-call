@@ -1,0 +1,535 @@
+import { IStore } from '../app/types';
+import { getCurrentConference } from '../base/conference/functions';
+import { getLocalParticipant, getParticipantById } from '../base/participants/functions';
+import { IParticipant } from '../base/participants/types';
+import { LOBBY_CHAT_INITIALIZED } from '../lobby/constants';
+
+import {
+    ADD_MESSAGE,
+    ADD_MESSAGE_REACTION,
+    CLEAR_CHAT_SEARCH,
+    CLEAR_CHAT_STATE,
+    CLOSE_CHAT,
+    EDIT_MESSAGE,
+    MODERATE_MESSAGE,
+    NOTIFY_PRIVATE_RECIPIENTS_CHANGED,
+    OPEN_CHAT,
+    REMOVE_LOBBY_CHAT_PARTICIPANT,
+    RETRACT_MESSAGE,
+    SEND_MESSAGE,
+    SEND_MESSAGE_EDIT,
+    SEND_MESSAGE_MODERATION,
+    SEND_MESSAGE_RETRACTION,
+    SEND_REACTION,
+    SET_CHAT_SEARCH_MATCH_INDEX,
+    SET_CHAT_SEARCH_QUERY,
+    SET_FOCUSED_TAB,
+    SET_LOBBY_CHAT_ACTIVE_STATE,
+    SET_LOBBY_CHAT_RECIPIENT,
+    SET_MESSAGE_MODERATION_SUPPORTED,
+    SET_PRIVATE_MESSAGE_RECIPIENT
+} from './actionTypes';
+import { ChatTabs } from './constants';
+import { IMessage } from './types';
+
+/**
+ * Adds a chat message to the collection of messages.
+ *
+ * @param {Object} messageDetails - The chat message to save.
+ * @param {string} messageDetails.displayName - The displayName of the
+ * participant that authored the message.
+ * @param {boolean} messageDetails.hasRead - Whether or not to immediately mark
+ * the message as read.
+ * @param {string} messageDetails.message - The received message to display.
+ * @param {string} messageDetails.messageType - The kind of message, such as
+ * "error" or "local" or "remote".
+ * @param {string} messageDetails.timestamp - A timestamp to display for when
+ * the message was received.
+ * @param {string} messageDetails.isReaction - Whether or not the
+ * message is a reaction message.
+ * @returns {{
+ *     type: ADD_MESSAGE,
+ *     displayName: string,
+ *     hasRead: boolean,
+ *     message: string,
+ *     messageType: ChatMessageType,
+ *     timestamp: string,
+ *     isReaction: boolean
+ * }}
+ */
+export function addMessage(messageDetails: Object) {
+    return {
+        type: ADD_MESSAGE,
+        ...messageDetails
+    };
+}
+
+/**
+ * Adds a reaction to a chat message.
+ *
+ * @param {Object} reactionDetails - The reaction to add.
+ * @param {string} reactionDetails.participantId - The ID of the message to react to.
+ * @param {string} reactionDetails.reactionList - The reaction to add.
+ * @param {string} reactionDetails.messageId - The receiver ID of the reaction.
+ * @returns {{
+ *     type: ADD_MESSAGE_REACTION,
+ *     participantId: string,
+ *     reactionList: string[],
+ *     messageId: string
+ * }}
+ */
+export function addMessageReaction(reactionDetails: Object) {
+    return {
+        type: ADD_MESSAGE_REACTION,
+        ...reactionDetails
+    };
+}
+
+/**
+ * Edits an existing chat message.
+ *
+ * @param {Object} message - The chat message to edit/override. The messages will be matched from the state
+ * comparing the messageId.
+ * @returns {{
+ *     type: EDIT_MESSAGE,
+ *     message: Object
+ * }}
+ */
+export function editMessage(message: Object) {
+    return {
+        type: EDIT_MESSAGE,
+        message
+    };
+}
+
+/**
+ * Clears the chat search query and match index.
+ *
+ * @returns {{
+ *     type: CLEAR_CHAT_SEARCH
+ * }}
+ */
+export function clearChatSearch() {
+    return {
+        type: CLEAR_CHAT_SEARCH
+    };
+}
+
+/**
+ * Clears the chat features state from Redux.
+ *
+ * @returns {{
+ *     type: CLEAR_CHAT_STATE
+ * }}
+ */
+export function clearChatState() {
+    return {
+        type: CLEAR_CHAT_STATE
+    };
+}
+
+/**
+ * Action to signal the closing of the chat dialog.
+ *
+ * @returns {{
+ *     type: CLOSE_CHAT
+ * }}
+ */
+export function closeChat() {
+    return {
+        type: CLOSE_CHAT
+    };
+}
+
+/**
+ * Sends a chat message to everyone in the conference.
+ *
+ * @param {string} message - The chat message to send out.
+ * @param {boolean} ignorePrivacy - True if the privacy notification should be ignored.
+ * @returns {{
+ *     type: SEND_MESSAGE,
+ *     ignorePrivacy: boolean,
+ *     message: string
+ * }}
+ */
+export function sendMessage(message: string, ignorePrivacy = false) {
+    return {
+        type: SEND_MESSAGE,
+        ignorePrivacy,
+        message
+    };
+}
+
+/**
+ * Requests retraction (delete) of a previously sent message.
+ *
+ * @param {IMessage} message - The message to retract.
+ * @returns {Object}
+ */
+export function sendMessageRetraction(message: IMessage) {
+    return {
+        type: SEND_MESSAGE_RETRACTION,
+        message
+    };
+}
+
+/**
+ * Sends a reaction to a message.
+ *
+ * @param {string} reaction - The reaction to send.
+ * @param {string} messageId - The message ID to react to.
+ * @param {string} receiverId - The receiver ID of the reaction.
+ * @returns {Function}
+ */
+export function sendReaction(reaction: string, messageId: string, receiverId?: string) {
+
+    return {
+        type: SEND_REACTION,
+        reaction,
+        messageId,
+        receiverId
+    };
+}
+
+/**
+ * Sends an edit for an existing chat message to everyone in the conference.
+ *
+ * @param {string} messageId - The ID of the message being edited.
+ * @param {string} message - The updated chat message.
+ * @returns {{
+ *     type: SEND_MESSAGE_EDIT,
+ *     messageId: string,
+ *     message: string
+ * }}
+ */
+export function sendMessageEdit(messageId: string, message: string) {
+    return {
+        type: SEND_MESSAGE_EDIT,
+        messageId,
+        message
+    };
+}
+
+/*
+ * Sets the chat search query and resets the match index back to the first result.
+ *
+ * @param {string} query - The search text.
+ * @returns {{
+ *     type: SET_CHAT_SEARCH_QUERY,
+ *     query: string
+ * }}
+ */
+export function setChatSearchQuery(query: string) {
+    return {
+        type: SET_CHAT_SEARCH_QUERY,
+        query
+    };
+}
+
+/**
+ * Sets which search match is currently focused (for prev/next navigation).
+ *
+ * @param {number} index - The index into the matches array.
+ * @returns {{
+ *     type: SET_CHAT_SEARCH_MATCH_INDEX,
+ *     index: number
+ * }}
+ */
+export function setChatSearchMatchIndex(index: number) {
+    return {
+        type: SET_CHAT_SEARCH_MATCH_INDEX,
+        index
+    };
+}
+
+/**
+ * Initiates the sending of a private message to the supplied participant.
+ *
+ * @param {IParticipant} participant - The participant to set the recipient to.
+ * @returns {{
+ *     participant: IParticipant,
+ *     type: SET_PRIVATE_MESSAGE_RECIPIENT
+ * }}
+ */
+export function setPrivateMessageRecipient(participant?: Object) {
+    return {
+        participant,
+        type: SET_PRIVATE_MESSAGE_RECIPIENT
+    };
+}
+
+/**
+ * Initiates the sending of a private message to the supplied participantId.
+ *
+ * @param {string} participantId - The participant id to set the recipient to.
+ * @returns {{
+*     participant: IParticipant,
+*     type: SET_PRIVATE_MESSAGE_RECIPIENT
+* }}
+*/
+export function setPrivateMessageRecipientById(participantId: string) {
+    return (dispatch: IStore['dispatch'], getState: IStore['getState']) => {
+        const participant = getParticipantById(getState(), participantId);
+
+        if (participant) {
+            dispatch(setPrivateMessageRecipient(participant));
+        }
+    };
+}
+
+/**
+ * Marks a message as retracted.
+ *
+ * @param {string} messageId - The retracted message id.
+ * @param {string} retractedBy - The participant ID of the user who retracted the message.
+ * @returns {Object}
+ */
+export function retractMessage(messageId: string, retractedBy: string) {
+    return {
+        type: RETRACT_MESSAGE,
+        messageId,
+        retractedBy
+    };
+}
+
+/**
+ * Set the value of the currently focused tab.
+ *
+ * @param {string} tabId - The id of the currently focused tab.
+ * @returns {{
+ *    type: SET_FOCUSED_TAB,
+ *    tabId: string
+ * }}
+ */
+export function setFocusedTab(tabId: ChatTabs) {
+    return {
+        type: SET_FOCUSED_TAB,
+        tabId
+    };
+}
+
+/**
+ * Opens the chat panel with CC tab active.
+ *
+ * @returns {Object} The redux action.
+ */
+export function openCCPanel() {
+    return async (dispatch: IStore['dispatch']) => {
+        dispatch(setFocusedTab(ChatTabs.CLOSED_CAPTIONS));
+        dispatch({
+            type: OPEN_CHAT
+        });
+    };
+}
+
+/**
+ * Opens the chat panel with polls tab active.
+ *
+ * @returns {Object} The redux action.
+ */
+export function openPollsPanel() {
+    return async (dispatch: IStore['dispatch']) => {
+        dispatch(setFocusedTab(ChatTabs.POLLS));
+        dispatch({
+            type: OPEN_CHAT
+        });
+    };
+}
+
+/**
+ * Opens the chat panel with file sharing tab active.
+ *
+ * @returns {Object} The redux action.
+ */
+export function openFileSharingPanel() {
+    return async (dispatch: IStore['dispatch']) => {
+        dispatch(setFocusedTab(ChatTabs.FILE_SHARING));
+        dispatch({
+            type: OPEN_CHAT
+        });
+    };
+}
+
+
+/**
+ * Initiates the sending of messages between a moderator and a lobby attendee.
+ *
+ * @param {Object} lobbyChatInitializedInfo - The information about the attendee and the moderator
+ * that is going to chat.
+ *
+ * @returns {Function}
+ */
+export function onLobbyChatInitialized(lobbyChatInitializedInfo: { attendee: IParticipant; moderator: IParticipant; }) {
+    return async (dispatch: IStore['dispatch'], getState: IStore['getState']) => {
+        const state = getState();
+        const conference = getCurrentConference(state);
+
+        const lobbyLocalId = conference?.myLobbyUserId();
+
+        if (!lobbyLocalId) {
+            return;
+        }
+
+        if (lobbyChatInitializedInfo.moderator.id === lobbyLocalId) {
+            dispatch({
+                type: SET_LOBBY_CHAT_RECIPIENT,
+                participant: lobbyChatInitializedInfo.attendee,
+                open: true
+            });
+        }
+
+        if (lobbyChatInitializedInfo.attendee.id === lobbyLocalId) {
+            return dispatch({
+                type: SET_LOBBY_CHAT_RECIPIENT,
+                participant: lobbyChatInitializedInfo.moderator,
+                open: false
+            });
+        }
+    };
+}
+
+/**
+ * Sets the lobby room's chat active state.
+ *
+ * @param {boolean} value - The active state.
+ *
+ * @returns {Object}
+ */
+export function setLobbyChatActiveState(value: boolean) {
+    return {
+        type: SET_LOBBY_CHAT_ACTIVE_STATE,
+        payload: value
+    };
+}
+
+/**
+ * Notifies the private chat recipients list changed.
+ *
+ * @returns {Object}
+ */
+export function notifyPrivateRecipientsChanged() {
+    return (dispatch: IStore['dispatch']) => {
+        const timestamp = Date.now();
+
+        return dispatch({
+            type: NOTIFY_PRIVATE_RECIPIENTS_CHANGED,
+            payload: timestamp
+        });
+    };
+}
+
+/**
+ * Removes lobby type messages.
+ *
+ *  @param {boolean} removeLobbyChatMessages - Should remove messages from chat  (works only for accepted users).
+ * If not specified, it will delete all lobby messages.
+ *
+ * @returns {Object}
+ */
+export function removeLobbyChatParticipant(removeLobbyChatMessages?: boolean) {
+    return {
+        type: REMOVE_LOBBY_CHAT_PARTICIPANT,
+        removeLobbyChatMessages
+    };
+}
+
+/**
+ * Handles initial setup of lobby message between
+ * Moderator and participant.
+ *
+ * @param {string} participantId - The participant id.
+ *
+ * @returns {Object}
+ */
+export function handleLobbyChatInitialized(participantId: string) {
+    return async (dispatch: IStore['dispatch'], getState: IStore['getState']) => {
+        if (!participantId) {
+            return;
+        }
+        const state = getState();
+        const conference = state['features/base/conference'].conference;
+        const { knockingParticipants } = state['features/lobby'];
+        const { lobbyMessageRecipient } = state['features/chat'];
+        const me = getLocalParticipant(state);
+        const lobbyLocalId = conference?.myLobbyUserId();
+
+
+        if (lobbyMessageRecipient && lobbyMessageRecipient.id === participantId) {
+            return dispatch(setLobbyChatActiveState(true));
+        }
+
+        const attendee = knockingParticipants.find(p => p.id === participantId);
+
+        if (attendee && attendee.chattingWithModerator === lobbyLocalId) {
+            return dispatch({
+                type: SET_LOBBY_CHAT_RECIPIENT,
+                participant: attendee,
+                open: true
+            });
+        }
+
+        if (!attendee) {
+            return;
+        }
+
+        const payload = { type: LOBBY_CHAT_INITIALIZED,
+            moderator: {
+                ...me,
+                name: 'Moderator',
+                id: lobbyLocalId
+            },
+            attendee };
+
+        // notify attendee privately.
+        conference?.sendLobbyMessage(payload, attendee.id);
+
+        // notify other moderators.
+        return conference?.sendLobbyMessage(payload);
+    };
+}
+
+/**
+ * Requests moderation of a chat message.
+ *
+ * The room applies the moderation and echoes it back to everybody, including the
+ * sender, so there is nothing to update locally here.
+ *
+ * @param {IMessage} message - The message to moderate.
+ * @param {string} reason - Reason to delete message.
+ * @returns {Object}
+ */
+export function sendMessageModeration(message: IMessage, reason?: string) {
+    return {
+        type: SEND_MESSAGE_MODERATION,
+        message,
+        reason
+    };
+}
+
+/**
+ * Marks a message as moderated.
+ *
+ * @param {string} messageId - The moderated message id.
+ * @param {string} reason - Optional moderation reason.
+ * @returns {Object}
+ */
+export function moderateMessage(messageId: string, reason?: string) {
+    return {
+        type: MODERATE_MESSAGE,
+        messageId,
+        reason
+    };
+}
+
+/**
+ * Sets whether the room handles message moderation and editing server side.
+ *
+ * @param {boolean} supported - Whether the room applies message moderation.
+ * @returns {Object}
+ */
+export function setMessageModerationSupported(supported: boolean) {
+    return {
+        type: SET_MESSAGE_MODERATION_SUPPORTED,
+        supported
+    };
+}
