@@ -74,13 +74,15 @@ const OPTIONAL_SERVICES = [
         // marks a moment in a recording, so it arrives and leaves with one.
         buttons: [ 'recording', 'highlight' ],
         variables: [ 'MEETSPACE_RECORDING_SHARING_URL' ],
-        config: ([ recordingSharingUrl ]) => ({
-            recordingService: {
-                enabled: true,
-                sharingEnabled: true
-            },
-            recordingSharingUrl
-        })
+        config: ([ recordingSharingUrl ]) => {
+            return {
+                recordingService: {
+                    enabled: true,
+                    sharingEnabled: true
+                },
+                recordingSharingUrl
+            };
+        }
     },
     {
         name: 'live streaming',
@@ -92,12 +94,14 @@ const OPTIONAL_SERVICES = [
         // one to point at.
         buttons: [ 'livestreaming' ],
         variables: [ 'MEETSPACE_LIVE_STREAMING_HELP_URL' ],
-        config: ([ helpLink ]) => ({
-            liveStreaming: {
-                enabled: true,
-                helpLink
-            }
-        })
+        config: ([ helpLink ]) => {
+            return {
+                liveStreaming: {
+                    enabled: true,
+                    helpLink
+                }
+            };
+        }
     },
     {
         name: 'dial-in',
@@ -108,10 +112,12 @@ const OPTIONAL_SERVICES = [
         // neither, which is why both are required together.
         buttons: [ 'invite' ],
         variables: [ 'MEETSPACE_DIAL_IN_NUMBERS_URL', 'MEETSPACE_DIAL_IN_CONF_CODE_URL' ],
-        config: ([ dialInNumbersUrl, dialInConfCodeUrl ]) => ({
-            dialInConfCodeUrl,
-            dialInNumbersUrl
-        })
+        config: ([ dialInNumbersUrl, dialInConfCodeUrl ]) => {
+            return {
+                dialInConfCodeUrl,
+                dialInNumbersUrl
+            };
+        }
     }
 ];
 

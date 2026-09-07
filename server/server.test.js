@@ -104,6 +104,91 @@ function readKnownToolbarButtons() {
     return declaration[1].match(/'[^']+'/g).map(quoted => quoted.slice(1, -1));
 }
 
+/**
+ * Reads the client's main bar thresholds from its own constants.
+ *
+ * The client sizes the bar, not the configuration: it keeps a table of window
+ * widths, each entry holding a fixed number of slots, and the widest entry the
+ * window clears is the one that lays the bar out. `mainToolbarButtons` only
+ * replaces the *order* of an entry, and a row is matched to an entry by its
+ * length, so the width a row addresses is a fact about the client rather than
+ * about the row. Reading the table here is what makes a width in a test mean
+ * the same thing it means in a browser.
+ *
+ * The two widest entries are placeholders that carry no order of their own; the
+ * client drops them unless a configuration hands them one.
+ *
+ * @returns {Array<Object>} Per entry: `width`, the window width it addresses,
+ * `slots`, how many buttons its bar holds, and `order`, the client's own order
+ * for it, or null when it is a placeholder.
+ */
+function readMainToolbarThresholds() {
+    const source = fs.readFileSync(
+        path.join(__dirname, '../react/features/toolbox/constants.ts'), 'utf8');
+    const declaration = (/export const THRESHOLDS = \[([\s\S]*?)\n\];/).exec(source);
+
+    assert.ok(declaration, 'THRESHOLDS was not found in the client constants');
+
+    const entries = [ ...declaration[1].matchAll(
+        /width:\s*(\d+),\s*order:\s*(?:\[([^\]]*)\]|DUMMY_(\d+)_BUTTONS_THRESHOLD_VALUE)/g) ]
+        .map(([ , width, order, placeholderSlots ]) => {
+            const keys = order ? order.match(/'[^']+'/g).map(quoted => quoted.slice(1, -1)) : null;
+
+            return {
+                order: keys,
+                slots: keys ? keys.length : Number(placeholderSlots),
+                width: Number(width)
+            };
+        });
+
+    assert.ok(entries.length > 0, 'no thresholds were read from the client constants');
+
+    return entries;
+}
+
+/**
+ * The main bar the client lays out at a window width, for a configuration.
+ *
+ * Mirrors what the client does with `mainToolbarButtons`: a row replaces the
+ * order of the threshold entry that has as many slots as the row has buttons, a
+ * placeholder no row matches is dropped, and the bar is the first entry the
+ * window is wider than.
+ *
+ * @param {Object} config - The `config` object the client would read.
+ * @param {number} clientWidth - The window width to lay the bar out for.
+ * @returns {Array<string>} The buttons the bar holds, in the order it holds
+ * them.
+ */
+function barAt(config, clientWidth) {
+    const rows = new Map(config.mainToolbarButtons.map(row => [ row.length, row ]));
+    const table = readMainToolbarThresholds()
+        .map(({ order, slots, width }) => {
+            return {
+                order: rows.get(slots) || order,
+                width
+            };
+        })
+        .filter(entry => entry.order);
+
+    return (table.find(({ width }) => clientWidth > width) || table[table.length - 1]).order;
+}
+
+/**
+ * The enabled buttons the bar leaves to the "More" menu at a window width.
+ *
+ * `hangup` is not among them: the client renders leaving beside the bar, so it
+ * is in neither the bar nor the menu.
+ *
+ * @param {Object} config - The `config` object the client would read.
+ * @param {number} clientWidth - The window width to lay the bar out for.
+ * @returns {Array<string>} The buttons that end up under "More".
+ */
+function overflowAt(config, clientWidth) {
+    const bar = barAt(config, clientWidth);
+
+    return config.toolbarButtons.filter(button => !bar.includes(button) && button !== 'hangup');
+}
+
 describe('readPort', () => {
     it('defaults when PORT is absent or empty', () => {
         assert.strictEqual(readPort({}), 8080);
@@ -290,6 +375,106 @@ describe('the toolbar the configuration serves', () => {
     });
 });
 
+describe('the bar a desktop and a mobile window lay out', () => {
+    const CORE_BUTTONS = [
+        'microphone',
+        'camera',
+        'desktop',
+        'chat',
+        'participants-pane',
+        'raisehand'
+    ];
+
+    // A laptop window, and a phone held upright.
+    const DESKTOP_WIDTH = 1280;
+    const MOBILE_WIDTH = 390;
+
+    // Everything this deployment enables that neither bar holds.
+    const MENU_AT_DESKTOP = [
+        'select-background',
+        'videoquality',
+        'security',
+        'closedcaptions',
+        'noisesuppression',
+        'sharedvideo',
+        'shareaudio',
+        'whiteboard',
+        'stats',
+        'settings',
+        'shortcuts',
+        'profile',
+        'help'
+    ];
+
+    it('lays out a row of this configuration at both widths', () => {
+        const config = evaluateConfig();
+
+        for (const width of [ DESKTOP_WIDTH, MOBILE_WIDTH ]) {
+            assert.ok(
+                config.mainToolbarButtons.includes(barAt(config, width)),
+                `at ${width}px the client falls back to a row of its own`);
+        }
+    });
+
+    it('takes the size of each bar from the client thresholds', () => {
+        const config = evaluateConfig();
+
+        assert.strictEqual(barAt(config, DESKTOP_WIDTH).length, 8);
+        assert.strictEqual(barAt(config, MOBILE_WIDTH).length, 4);
+    });
+
+    it('leads the desktop bar with the core controls', () => {
+        const bar = barAt(evaluateConfig(), DESKTOP_WIDTH);
+
+        assert.deepStrictEqual(bar.slice(0, CORE_BUTTONS.length), CORE_BUTTONS);
+
+        // The eight slots a desktop window gives the bar belong to the client,
+        // and it fills every one of them: what a row leaves out, it picks
+        // itself. The two past the core controls are therefore chosen rather
+        // than spare, and tile view and full screen are the choice.
+        assert.deepStrictEqual(bar.slice(CORE_BUTTONS.length), [ 'tileview', 'fullscreen' ]);
+    });
+
+    it('holds nothing but core controls in the mobile bar', () => {
+        const bar = barAt(evaluateConfig(), MOBILE_WIDTH);
+
+        assert.deepStrictEqual(
+            bar.filter(button => !CORE_BUTTONS.includes(button)),
+            [],
+            `${bar.join(', ')} is not all core controls`);
+
+        // Four slots for six core controls: screen share and raise hand are
+        // the two a phone gives up, and they give way to "More", not to a
+        // button nobody chose.
+        assert.deepStrictEqual(bar, [ 'microphone', 'camera', 'chat', 'participants-pane' ]);
+    });
+
+    it('renders leaving outside both bars', () => {
+        const config = evaluateConfig();
+
+        assert.ok(config.toolbarButtons.includes('hangup'), 'leaving is not enabled');
+
+        for (const width of [ DESKTOP_WIDTH, MOBILE_WIDTH ]) {
+            assert.ok(
+                !barAt(config, width).includes('hangup'),
+                `hangup holds a slot in the bar at ${width}px`);
+        }
+    });
+
+    it('leaves every other enabled button to the "More" menu', () => {
+        const config = evaluateConfig();
+
+        assert.deepStrictEqual(overflowAt(config, DESKTOP_WIDTH), MENU_AT_DESKTOP);
+        assert.deepStrictEqual(overflowAt(config, MOBILE_WIDTH), [
+            'desktop',
+            'raisehand',
+            'tileview',
+            'fullscreen',
+            ...MENU_AT_DESKTOP
+        ]);
+    });
+});
+
 describe('the services the environment configures', () => {
     const RECORDING = { MEETSPACE_RECORDING_SHARING_URL: 'https://recordings.example.com/' };
     const STREAMING = { MEETSPACE_LIVE_STREAMING_HELP_URL: 'https://help.example.com/streaming' };
@@ -366,6 +551,7 @@ describe('the services the environment configures', () => {
 
     it('refuses a service URL the browser cannot fetch', () => {
         assert.throws(
+            // eslint-disable-next-line no-script-url
             () => readServices({ MEETSPACE_RECORDING_SHARING_URL: 'javascript:alert(1)' }),
             /not an http\(s\) URL/);
         assert.throws(
