@@ -15,32 +15,47 @@ has been rebranded or restructured beyond what demo mode needs.
 - Node.js 24 (tested on 24.20.0) and npm 11
 - macOS or Linux, GNU make
 
-## Setup
+## From a clean checkout
+
+Three commands, in this order, on a machine with nothing but Node and make:
 
 ```bash
-npm install
-```
-
-The install pulls the React Native toolchain too, so it takes a while and lands
-around 1.3 GB in `node_modules`.
-
-## Running it locally
-
-**Production build, what a deployment and the preview run:**
-
-```bash
+npm install            # dependencies + postinstall, a few minutes
 npm run build          # webpack production bundles + asset deploy into libs/
 PORT=5400 npm start    # http://localhost:5400
 ```
+
+Then check it answers:
+
+```bash
+curl -sI http://127.0.0.1:5400/     # 200, content-type: text/html
+```
+
+There is no database and no cache, so there is nothing to migrate and nothing to
+seed. There are no accounts either, dummy or otherwise: anyone with the URL opens
+a room, and the room exists because someone opened it.
+
+`npm install` also runs `postinstall`, which applies the `patches/` overrides and
+prepares the React Native side (`jetifier`, autolinking metadata). Those steps
+are pure Node and succeed without an Android or iOS toolchain installed, so a
+web-only checkout is unaffected — it only pays the minutes. The install pulls the
+React Native toolchain too, so it lands around 1.3 GB in `node_modules`.
+
+`.npmrc` asks npm for dev dependencies explicitly: the build toolchain (webpack,
+sass, patch-package) lives in `devDependencies`, and a host that exports
+`NODE_ENV=production` would otherwise skip them and break both the install and
+the build.
+
+## Running it locally
+
+**The production build above is what a deployment and the preview run.**
 
 `npm start` (`node server/index.js`) serves everything on one plain HTTP port:
 the built bundles and assets, `config.js` and `interface_config.js` generated
 from the environment, and the application shell for every other path, so room
 URLs like `/StandUp` work. It binds `PORT` (default 8080) on `0.0.0.0` and never
-redirects to https, because TLS is terminated in front of it. There is no
-database and no cache, so there are no migrations or seeds to run: a green-field
-checkout needs `npm install`, `npm run build`, `npm start`, in that order. There
-are no accounts either, dummy or otherwise; anyone with the URL can open a room.
+redirects to https, because TLS is terminated in front of it. It refuses to start
+when the build output is missing rather than serving a broken shell.
 
 Configuration, all optional:
 
@@ -113,7 +128,9 @@ DEMO.md                  demo mode documentation
 
 The only upstream files touched are `webpack.config.js` (a demo mode branch in
 the dev server config plus host/port env overrides), `Makefile` (the `demo` and
-`demo-assets` targets), `package.json` (scripts) and `.gitignore`.
+`demo-assets` targets), `package.json` (scripts), `.npmrc` (`include=dev`) and
+`.gitignore` (its `tsconfig.json` rule is anchored to the root, so the checked-in
+`tests/tsconfig.json` that the tests' eslint config parses with survives a clone).
 
 ## Not done yet
 

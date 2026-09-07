@@ -96,7 +96,9 @@ twa/*.apk
 twa/*.aab
 twa/assetlinks.json
 
-tsconfig.json
+# The IDE's generated root tsconfig. Anchored, because `tests/tsconfig.json` is
+# checked in: the eslint config for the tests points its parser at it.
+/tsconfig.json
 
 # React Native SDK
 #
