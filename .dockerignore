@@ -1,0 +1,7 @@
+node_modules
+.git
+android
+ios
+react-native-sdk
+build
+*.map

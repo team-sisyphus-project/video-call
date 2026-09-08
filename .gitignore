@@ -2,7 +2,9 @@
 .*.tmp
 deploy-local.sh
 libs/
+!/libs/
 all.css
+!/css/all.css
 *css.map
 .remote-sync.json
 .sync-config.cson
@@ -123,4 +125,6 @@ test-results
 
 # MeetSpace demo mode (generated)
 index.demo.html
+demo/config.runtime.js
+demo/index.static.html
 demo/config.runtime.js
