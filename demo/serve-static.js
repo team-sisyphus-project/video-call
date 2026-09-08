@@ -83,7 +83,9 @@ function sendFile(file, res) {
         res.writeHead(200, {
             'Content-Type': TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream',
             'Content-Length': st.size,
-            'Cache-Control': file === SHELL ? 'no-store' : 'public, max-age=3600'
+            // The shell and demo config change per deploy; the hashed-by-version libs can be cached.
+            'Cache-Control': file === SHELL || file.startsWith(path.join(ROOT, 'demo'))
+                ? 'no-store' : 'public, max-age=3600'
         });
         fs.createReadStream(file).pipe(res);
     });
