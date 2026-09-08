@@ -24,8 +24,10 @@ var config = {
     },
 
     // Same origin, proxied to MEETSPACE_BACKEND by the dev server.
-    bosh: '/http-bind',
-    websocket: '/xmpp-websocket',
+    // lib-jitsi-meet parses these with `new URL()`, so they must be absolute.
+    bosh: window.location.origin + '/http-bind',
+    websocket: (window.location.protocol === 'https:' ? 'wss://' : 'ws://')
+        + window.location.host + '/xmpp-websocket',
 
     // Demo visitors land on the welcome page and pick a room from there.
     enableWelcomePage: true,
